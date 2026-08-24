@@ -1,6 +1,4 @@
 # bot.py
-# Giveaway Tracker
-# User App OAuth / Auto Join version
 
 import os
 
@@ -20,26 +18,18 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 
 if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN is missing from the environment.")
+    raise RuntimeError("DISCORD_TOKEN is missing.")
+
 
 TARGET_GIVEAWAY_BOT_ID = (
-    os.getenv("TARGET_GIVEAWAY_BOT_ID", "").strip() or None
+    os.getenv("TARGET_GIVEAWAY_BOT_ID", "").strip()
+    or None
 )
 
 
-# =========================================================
-# INTENTS
-# =========================================================
-
 intents = discord.Intents.default()
-
-# Required so the giveaway detector can inspect messages.
 intents.message_content = True
 
-
-# =========================================================
-# BOT
-# =========================================================
 
 class GiveawayTracker(commands.Bot):
 
@@ -52,51 +42,33 @@ class GiveawayTracker(commands.Bot):
 
     async def setup_hook(self):
 
-        # -------------------------------------------------
-        # DATABASE
-        # -------------------------------------------------
-
+        print("[STARTUP] Initializing database...")
         database.init_db()
 
-        print("[DATABASE] Database initialized.")
-
-        # -------------------------------------------------
-        # OAUTH SERVER
-        # -------------------------------------------------
-
+        print("[STARTUP] Initializing OAuth...")
         oauth_server.init_oauth()
 
-        print("[OAUTH] OAuth initialized.")
-
-        # -------------------------------------------------
-        # GIVEAWAY DETECTOR
-        # -------------------------------------------------
+        print("[STARTUP] Initializing giveaway detector...")
 
         giveaway_detector.configure_target_bot(
             TARGET_GIVEAWAY_BOT_ID
         )
 
-        # -------------------------------------------------
-        # COMMANDS
-        # -------------------------------------------------
-
+        print("[STARTUP] Loading Auto Join...")
         auto_join.setup(self)
+
+        print("[STARTUP] Loading Giveaway System...")
         giveaway_system.setup(self)
 
-        # -------------------------------------------------
-        # OAUTH CALLBACK SERVER
-        # -------------------------------------------------
-
+        print("[STARTUP] Starting OAuth server...")
         await oauth_server.start_oauth_server()
 
-        # -------------------------------------------------
-        # SYNC SLASH COMMANDS
-        # -------------------------------------------------
+        print("[STARTUP] Syncing slash commands...")
 
         synced = await self.tree.sync()
 
         print(
-            f"[BOT] Synced {len(synced)} slash command(s)."
+            f"[STARTUP] Synced {len(synced)} commands."
         )
 
     async def on_ready(self):
@@ -119,11 +91,10 @@ class GiveawayTracker(commands.Bot):
         print("=" * 60)
         print()
 
-    async def on_message(self, message: discord.Message):
-
-        # -------------------------------------------------
-        # GIVEAWAY DETECTION
-        # -------------------------------------------------
+    async def on_message(
+        self,
+        message: discord.Message
+    ):
 
         try:
 
@@ -134,27 +105,22 @@ class GiveawayTracker(commands.Bot):
         except Exception as exc:
 
             print(
-                "[DETECTOR] Error while processing "
-                f"message {message.id}: {exc}"
+                "[DETECTOR ERROR]"
             )
 
-        # -------------------------------------------------
-        # PREFIX COMMANDS
-        # -------------------------------------------------
+            print(
+                f"Message: {message.id}"
+            )
+
+            print(
+                f"Error: {type(exc).__name__}: {exc}"
+            )
 
         await self.process_commands(message)
 
 
-# =========================================================
-# CREATE BOT
-# =========================================================
-
 bot = GiveawayTracker()
 
-
-# =========================================================
-# SLASH COMMAND ERROR HANDLER
-# =========================================================
 
 @bot.tree.error
 async def slash_command_error(
@@ -162,38 +128,50 @@ async def slash_command_error(
     error: discord.app_commands.AppCommandError
 ):
 
+    print()
+    print("=" * 60)
+    print("❌ SLASH COMMAND ERROR")
+    print("=" * 60)
+
     print(
-        "[COMMAND ERROR]",
-        type(error).__name__,
-        error
+        f"Type: {type(error).__name__}"
     )
 
+    print(
+        f"Error: {repr(error)}"
+    )
+
+    print("=" * 60)
+    print()
+
     try:
+
+        message = (
+            "❌ Something went wrong.\n"
+            f"`{type(error).__name__}`"
+        )
 
         if interaction.response.is_done():
 
             await interaction.followup.send(
-                "❌ Something went wrong.",
+                message,
                 ephemeral=True
             )
 
         else:
 
             await interaction.response.send_message(
-                "❌ Something went wrong.",
+                message,
                 ephemeral=True
             )
 
-    except discord.HTTPException:
-        pass
+    except discord.HTTPException as exc:
 
+        print(
+            f"[ERROR HANDLER] {exc}"
+        )
 
-# =========================================================
-# START
-# =========================================================
 
 if __name__ == "__main__":
-
-    print("Starting Giveaway Tracker...")
 
     bot.run(TOKEN)

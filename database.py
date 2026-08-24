@@ -1,36 +1,443 @@
-import os, sqlite3, threading, time
-DB_PATH=os.getenv('DATABASE_PATH','giveaway_tracker.db'); LOCK=threading.RLock()
-def db():
- c=sqlite3.connect(DB_PATH,timeout=30); c.row_factory=sqlite3.Row; return c
+# database.py
+
+import os
+import sqlite3
+import threading
+import time
+
+
+DB_PATH = os.getenv(
+    "DATABASE_PATH",
+    "giveaway_tracker.db"
+)
+
+_lock = threading.RLock()
+
+
+def _connect():
+
+    conn = sqlite3.connect(
+        DB_PATH,
+        timeout=30
+    )
+
+    conn.row_factory = sqlite3.Row
+
+    return conn
+
+
 def init_db():
- with LOCK,db() as c:
-  c.executescript('''CREATE TABLE IF NOT EXISTS auto_join(user_id TEXT PRIMARY KEY,enabled INTEGER NOT NULL DEFAULT 0,updated_at REAL NOT NULL);
-CREATE TABLE IF NOT EXISTS oauth_states(state TEXT PRIMARY KEY,user_id TEXT NOT NULL,created_at REAL NOT NULL,used INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS oauth_users(user_id TEXT PRIMARY KEY,access_token TEXT NOT NULL,refresh_token TEXT,expires_at REAL,token_type TEXT,scope TEXT,updated_at REAL NOT NULL);
-CREATE TABLE IF NOT EXISTS detected_giveaways(message_id TEXT PRIMARY KEY,guild_id TEXT,channel_id TEXT,author_id TEXT,detected_at REAL NOT NULL);'''); c.commit()
-def set_auto_join(uid,enabled):
- with LOCK,db() as c:
-  c.execute('INSERT INTO auto_join VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,updated_at=excluded.updated_at',(str(uid),int(enabled),time.time())); c.commit()
-def is_auto_join_enabled(uid):
- with LOCK,db() as c:
-  r=c.execute('SELECT enabled FROM auto_join WHERE user_id=?',(str(uid),)).fetchone(); return bool(r and r['enabled'])
-def create_oauth_state(state,uid):
- with LOCK,db() as c: c.execute('INSERT INTO oauth_states VALUES(?,?,?,0)',(state,str(uid),time.time())); c.commit()
-def consume_oauth_state(state,ttl=600):
- with LOCK,db() as c:
-  r=c.execute('SELECT user_id,created_at,used FROM oauth_states WHERE state=?',(state,)).fetchone()
-  if not r or r['used'] or time.time()-r['created_at']>ttl: return None
-  cur=c.execute('UPDATE oauth_states SET used=1 WHERE state=? AND used=0',(state,)); c.commit()
-  return str(r['user_id']) if cur.rowcount==1 else None
-def save_oauth_user(uid,access,refresh,expires,token_type,scope):
- with LOCK,db() as c:
-  c.execute('''INSERT INTO oauth_users VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET access_token=excluded.access_token,refresh_token=excluded.refresh_token,expires_at=excluded.expires_at,token_type=excluded.token_type,scope=excluded.scope,updated_at=excluded.updated_at''',(str(uid),access,refresh,expires,token_type,scope,time.time())); c.commit()
-def get_oauth_user(uid):
- with LOCK,db() as c:
-  r=c.execute('SELECT * FROM oauth_users WHERE user_id=?',(str(uid),)).fetchone(); return dict(r) if r else None
-def is_user_authorized(uid): return get_oauth_user(uid) is not None
-def giveaway_already_detected(mid):
- with LOCK,db() as c: return c.execute('SELECT 1 FROM detected_giveaways WHERE message_id=?',(str(mid),)).fetchone() is not None
-def mark_giveaway_detected(mid,guild,channel,author):
- with LOCK,db() as c:
-  cur=c.execute('INSERT OR IGNORE INTO detected_giveaways VALUES(?,?,?,?,?)',(str(mid),guild,channel,author,time.time())); c.commit(); return cur.rowcount==1
+
+    with _lock:
+
+        with _connect() as conn:
+
+            conn.executescript("""
+
+            CREATE TABLE IF NOT EXISTS auto_join (
+
+                user_id TEXT PRIMARY KEY,
+
+                enabled INTEGER NOT NULL DEFAULT 0,
+
+                updated_at REAL NOT NULL
+
+            );
+
+
+            CREATE TABLE IF NOT EXISTS oauth_states (
+
+                state TEXT PRIMARY KEY,
+
+                user_id TEXT NOT NULL,
+
+                created_at REAL NOT NULL,
+
+                used INTEGER NOT NULL DEFAULT 0
+
+            );
+
+
+            CREATE TABLE IF NOT EXISTS oauth_users (
+
+                user_id TEXT PRIMARY KEY,
+
+                access_token TEXT NOT NULL,
+
+                refresh_token TEXT,
+
+                expires_at REAL,
+
+                token_type TEXT,
+
+                scope TEXT,
+
+                updated_at REAL NOT NULL
+
+            );
+
+
+            CREATE TABLE IF NOT EXISTS detected_giveaways (
+
+                message_id TEXT PRIMARY KEY,
+
+                guild_id TEXT,
+
+                channel_id TEXT,
+
+                author_id TEXT,
+
+                detected_at REAL NOT NULL
+
+            );
+
+            """)
+
+            conn.commit()
+
+
+def set_auto_join(
+    user_id: str,
+    enabled: bool
+):
+
+    with _lock:
+
+        with _connect() as conn:
+
+            conn.execute(
+                """
+                INSERT INTO auto_join
+                (
+                    user_id,
+                    enabled,
+                    updated_at
+                )
+
+                VALUES (?, ?, ?)
+
+                ON CONFLICT(user_id)
+                DO UPDATE SET
+
+                    enabled =
+                        excluded.enabled,
+
+                    updated_at =
+                        excluded.updated_at
+                """,
+
+                (
+                    str(user_id),
+                    int(enabled),
+                    time.time()
+                )
+            )
+
+            conn.commit()
+
+
+def is_auto_join_enabled(
+    user_id: str
+):
+
+    with _lock:
+
+        with _connect() as conn:
+
+            row = conn.execute(
+                """
+                SELECT enabled
+
+                FROM auto_join
+
+                WHERE user_id=?
+                """,
+
+                (str(user_id),)
+            ).fetchone()
+
+            return bool(
+                row and row["enabled"]
+            )
+
+
+def create_oauth_state(
+    state: str,
+    user_id: str
+):
+
+    with _lock:
+
+        with _connect() as conn:
+
+            conn.execute(
+                """
+                INSERT INTO oauth_states
+                (
+                    state,
+                    user_id,
+                    created_at,
+                    used
+                )
+
+                VALUES (?, ?, ?, 0)
+                """,
+
+                (
+                    state,
+                    str(user_id),
+                    time.time()
+                )
+            )
+
+            conn.commit()
+
+
+def consume_oauth_state(
+    state: str,
+    max_age: int = 600
+):
+
+    now = time.time()
+
+    with _lock:
+
+        with _connect() as conn:
+
+            row = conn.execute(
+                """
+                SELECT
+                    user_id,
+                    created_at,
+                    used
+
+                FROM oauth_states
+
+                WHERE state=?
+                """,
+
+                (state,)
+            ).fetchone()
+
+            if not row:
+                return None
+
+            if row["used"]:
+                return None
+
+            if (
+                now
+                - float(row["created_at"])
+                > max_age
+            ):
+
+                conn.execute(
+                    """
+                    DELETE FROM oauth_states
+                    WHERE state=?
+                    """,
+
+                    (state,)
+                )
+
+                conn.commit()
+
+                return None
+
+            result = conn.execute(
+                """
+                UPDATE oauth_states
+
+                SET used=1
+
+                WHERE state=?
+                AND used=0
+                """,
+
+                (state,)
+            )
+
+            conn.commit()
+
+            if result.rowcount != 1:
+                return None
+
+            return str(
+                row["user_id"]
+            )
+
+
+def save_oauth_user(
+    user_id: str,
+    access_token: str,
+    refresh_token=None,
+    expires_at=None,
+    token_type=None,
+    scope=None
+):
+
+    with _lock:
+
+        with _connect() as conn:
+
+            conn.execute(
+                """
+                INSERT INTO oauth_users
+                (
+                    user_id,
+                    access_token,
+                    refresh_token,
+                    expires_at,
+                    token_type,
+                    scope,
+                    updated_at
+                )
+
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+
+                ON CONFLICT(user_id)
+                DO UPDATE SET
+
+                    access_token =
+                        excluded.access_token,
+
+                    refresh_token =
+                        excluded.refresh_token,
+
+                    expires_at =
+                        excluded.expires_at,
+
+                    token_type =
+                        excluded.token_type,
+
+                    scope =
+                        excluded.scope,
+
+                    updated_at =
+                        excluded.updated_at
+                """,
+
+                (
+                    str(user_id),
+                    access_token,
+                    refresh_token,
+                    expires_at,
+                    token_type,
+                    scope,
+                    time.time()
+                )
+            )
+
+            conn.commit()
+
+
+def get_oauth_user(
+    user_id: str
+):
+
+    with _lock:
+
+        with _connect() as conn:
+
+            row = conn.execute(
+                """
+                SELECT *
+
+                FROM oauth_users
+
+                WHERE user_id=?
+                """,
+
+                (str(user_id),)
+            ).fetchone()
+
+            if not row:
+                return None
+
+            return dict(row)
+
+
+def is_user_authorized(
+    user_id: str
+):
+
+    return (
+        get_oauth_user(
+            str(user_id)
+        )
+        is not None
+    )
+
+
+def mark_giveaway_detected(
+    message_id: str,
+    guild_id=None,
+    channel_id=None,
+    author_id=None
+):
+
+    with _lock:
+
+        with _connect() as conn:
+
+            result = conn.execute(
+                """
+                INSERT OR IGNORE INTO
+                detected_giveaways
+
+                (
+                    message_id,
+                    guild_id,
+                    channel_id,
+                    author_id,
+                    detected_at
+                )
+
+                VALUES (?, ?, ?, ?, ?)
+                """,
+
+                (
+                    str(message_id),
+
+                    str(guild_id)
+                    if guild_id is not None
+                    else None,
+
+                    str(channel_id)
+                    if channel_id is not None
+                    else None,
+
+                    str(author_id)
+                    if author_id is not None
+                    else None,
+
+                    time.time()
+                )
+            )
+
+            conn.commit()
+
+            return result.rowcount == 1
+
+
+def giveaway_already_detected(
+    message_id: str
+):
+
+    with _lock:
+
+        with _connect() as conn:
+
+            row = conn.execute(
+                """
+                SELECT 1
+
+                FROM detected_giveaways
+
+                WHERE message_id=?
+                """,
+
+                (str(message_id),)
+            ).fetchone()
+
+            return row is not None
