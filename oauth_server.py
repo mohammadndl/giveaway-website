@@ -1,3 +1,23 @@
-# OAuth is intentionally not used by this build. User-token/self-bot automation is not used.
-def init_oauth(): pass
-async def start_oauth_server(): pass
+"""
+OAuth is intentionally disabled.
+
+This version does NOT use:
+
+- OAuth user tokens
+- user-account automation
+- self-bots
+- user impersonation
+
+The bot account handles its own giveaway entries.
+"""
+
+def init_oauth():
+    print(
+        "[OAUTH] Disabled."
+    )
+
+
+async def start_oauth_server():
+    print(
+        "[OAUTH] Disabled."
+    )
