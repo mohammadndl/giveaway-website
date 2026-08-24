@@ -38,7 +38,6 @@ BOT_API_KEY = os.getenv(
     "BOT_API_KEY"
 )
 
-# Use an absolute path so Render always uses the same DB
 BASE_DIR = os.path.dirname(
     os.path.abspath(__file__)
 )
@@ -64,18 +63,11 @@ def database():
 
 def init_database():
 
-    print()
-    print("=" * 60)
-    print("🗄️ INITIALIZING DATABASE")
-    print("=" * 60)
-    print("Database:", DATABASE)
-
     db = database()
-
     cursor = db.cursor()
 
     # --------------------------------------------------------
-    # OAuth users
+    # Authorized Discord users
     # --------------------------------------------------------
 
     cursor.execute("""
@@ -83,17 +75,27 @@ def init_database():
 
             user_id TEXT PRIMARY KEY,
 
+            username TEXT,
+
             access_token TEXT NOT NULL,
 
             refresh_token TEXT,
 
-            expires_at INTEGER NOT NULL
+            expires_at INTEGER NOT NULL,
+
+            created_at INTEGER NOT NULL
 
         )
     """)
 
     # --------------------------------------------------------
     # OAuth states
+    #
+    # IMPORTANT:
+    # There is NO user_id here anymore.
+    #
+    # We don't know the user's Discord ID until Discord
+    # sends us back the OAuth callback.
     # --------------------------------------------------------
 
     cursor.execute("""
@@ -101,51 +103,22 @@ def init_database():
 
             state TEXT PRIMARY KEY,
 
-            user_id TEXT NOT NULL,
-
             created_at INTEGER NOT NULL
 
         )
     """)
 
     db.commit()
-
-    # --------------------------------------------------------
-    # Verify tables actually exist
-    # --------------------------------------------------------
-
-    cursor.execute("""
-        SELECT name
-        FROM sqlite_master
-        WHERE type = 'table'
-    """)
-
-    tables = [
-        row[0]
-        for row in cursor.fetchall()
-    ]
-
     db.close()
 
-    print("Tables:", tables)
-
-    if "oauth_users" in tables:
-        print("✅ oauth_users exists")
-    else:
-        print("❌ oauth_users MISSING")
-
-    if "oauth_states" in tables:
-        print("✅ oauth_states exists")
-    else:
-        print("❌ oauth_states MISSING")
-
-    print("=" * 60)
-    print()
+    print(
+        "✅ Database initialized:",
+        DATABASE
+    )
 
 
 # IMPORTANT:
-# Render/Gunicorn imports this file instead of running it
-# as __main__, so database initialization MUST happen here.
+# This runs when Render/Gunicorn imports server.py.
 init_database()
 
 
@@ -177,88 +150,70 @@ def health():
 
 
 # ============================================================
-# START
+# AUTO PAGE
 # ============================================================
 
-@app.route("/start")
-def start():
+@app.route("/auto")
+def auto():
 
-    return """
-    <html>
-
-    <head>
-        <title>Giveaway Tracker</title>
-    </head>
-
-    <body style="
-        background:#111827;
-        color:white;
-        font-family:Arial;
-        text-align:center;
-        padding-top:100px;
-    ">
-
-        <h1>Giveaway Tracker</h1>
-
-        <p>
-            Please open this page from the
-            Discord bot authorization button.
-        </p>
-
-    </body>
-
-    </html>
-    """
+    return send_file(
+        os.path.join(
+            BASE_DIR,
+            "index.html"
+        )
+    )
 
 
 # ============================================================
 # AUTHORIZE
+#
+# IMPORTANT:
+# NO ?user_id= REQUIRED
+#
+# The user ID is obtained AFTER Discord authorization.
 # ============================================================
 
 @app.route("/authorize")
 def authorize():
 
-    user_id = request.args.get(
-        "user_id"
-    )
+    # --------------------------------------------------------
+    # Check Discord client secret
+    # --------------------------------------------------------
 
-    if not user_id:
+    if not CLIENT_SECRET:
+
+        print(
+            "❌ DISCORD_CLIENT_SECRET is missing."
+        )
 
         return redirect(
             "/?error="
             + urllib.parse.quote(
-                "Missing Discord user."
+                "Discord OAuth is not configured."
             )
         )
 
-    user_id = str(user_id)
-
     # --------------------------------------------------------
-    # Make sure database exists
-    # --------------------------------------------------------
-
-    init_database()
-
-    # --------------------------------------------------------
-    # Create OAuth state
+    # Generate OAuth state
     # --------------------------------------------------------
 
     state = secrets.token_urlsafe(32)
 
-    db = database()
+    # --------------------------------------------------------
+    # Save state
+    # --------------------------------------------------------
 
+    db = database()
     cursor = db.cursor()
 
     cursor.execute("""
         INSERT INTO oauth_states (
             state,
-            user_id,
             created_at
         )
-        VALUES (?, ?, ?)
+        VALUES (?, ?)
     """, (
         state,
-        user_id,
         int(time.time())
     ))
 
@@ -266,19 +221,34 @@ def authorize():
     db.close()
 
     # --------------------------------------------------------
-    # Discord OAuth redirect
+    # Discord callback
     # --------------------------------------------------------
 
     redirect_uri = (
         f"{PUBLIC_URL}/callback"
     )
 
+    # --------------------------------------------------------
+    # Discord OAuth parameters
+    # --------------------------------------------------------
+
     params = {
-        "client_id": CLIENT_ID,
-        "response_type": "code",
-        "redirect_uri": redirect_uri,
-        "scope": "identify guilds.join",
-        "state": state
+
+        "client_id":
+            CLIENT_ID,
+
+        "response_type":
+            "code",
+
+        "redirect_uri":
+            redirect_uri,
+
+        "scope":
+            "identify",
+
+        "state":
+            state
+
     }
 
     discord_url = (
@@ -286,10 +256,15 @@ def authorize():
         + urllib.parse.urlencode(params)
     )
 
+    print()
+    print("=" * 60)
+    print("🔐 STARTING DISCORD AUTHORIZATION")
+    print("=" * 60)
     print(
-        "🔐 Starting OAuth for user:",
-        user_id
+        "Redirect URI:",
+        redirect_uri
     )
+    print("=" * 60)
 
     return redirect(
         discord_url
@@ -316,25 +291,25 @@ def callback():
     )
 
     # --------------------------------------------------------
-    # OAuth cancelled
+    # User cancelled
     # --------------------------------------------------------
 
     if error:
 
         print(
-            "❌ OAuth cancelled:",
+            "❌ Discord OAuth error:",
             error
         )
 
         return redirect(
             "/?error="
             + urllib.parse.quote(
-                "Authorization cancelled."
+                "Discord authorization was cancelled."
             )
         )
 
     # --------------------------------------------------------
-    # Validate callback
+    # Missing values
     # --------------------------------------------------------
 
     if not code or not state:
@@ -342,21 +317,19 @@ def callback():
         return redirect(
             "/?error="
             + urllib.parse.quote(
-                "Invalid OAuth callback."
+                "Invalid Discord authorization callback."
             )
         )
 
     # --------------------------------------------------------
-    # Find state
+    # Find OAuth state
     # --------------------------------------------------------
 
     db = database()
-
     cursor = db.cursor()
 
     cursor.execute("""
         SELECT
-            user_id,
             created_at
         FROM oauth_states
         WHERE state = ?
@@ -366,7 +339,9 @@ def callback():
 
     row = cursor.fetchone()
 
-    # State can only be used once
+    # Delete state immediately.
+    #
+    # This prevents replaying the same OAuth callback.
     cursor.execute("""
         DELETE FROM oauth_states
         WHERE state = ?
@@ -377,7 +352,15 @@ def callback():
     db.commit()
     db.close()
 
+    # --------------------------------------------------------
+    # State doesn't exist
+    # --------------------------------------------------------
+
     if not row:
+
+        print(
+            "❌ Invalid OAuth state."
+        )
 
         return redirect(
             "/?error="
@@ -386,9 +369,7 @@ def callback():
             )
         )
 
-    user_id = row[0]
-
-    created_at = row[1]
+    created_at = row[0]
 
     # --------------------------------------------------------
     # State expiration
@@ -400,33 +381,20 @@ def callback():
         > 600
     ):
 
-        return redirect(
-            "/?error="
-            + urllib.parse.quote(
-                "Authorization expired."
-            )
-        )
-
-    # --------------------------------------------------------
-    # Check client secret
-    # --------------------------------------------------------
-
-    if not CLIENT_SECRET:
-
         print(
-            "❌ DISCORD_CLIENT_SECRET is missing!"
+            "❌ OAuth state expired."
         )
 
         return redirect(
             "/?error="
             + urllib.parse.quote(
-                "Discord OAuth is not configured."
+                "Authorization expired. Please try again."
             )
         )
 
-    # --------------------------------------------------------
-    # Exchange OAuth code
-    # --------------------------------------------------------
+    # ========================================================
+    # EXCHANGE CODE FOR TOKEN
+    # ========================================================
 
     redirect_uri = (
         f"{PUBLIC_URL}/callback"
@@ -439,11 +407,22 @@ def callback():
             f"{DISCORD_API}/oauth2/token",
 
             data={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": redirect_uri
+
+                "client_id":
+                    CLIENT_ID,
+
+                "client_secret":
+                    CLIENT_SECRET,
+
+                "grant_type":
+                    "authorization_code",
+
+                "code":
+                    code,
+
+                "redirect_uri":
+                    redirect_uri
+
             },
 
             timeout=20
@@ -464,13 +443,13 @@ def callback():
         )
 
     # --------------------------------------------------------
-    # Check Discord response
+    # Token exchange failed
     # --------------------------------------------------------
 
     if response.status_code != 200:
 
         print(
-            "❌ Discord token error:",
+            "❌ Discord OAuth token error:",
             response.status_code
         )
 
@@ -481,9 +460,13 @@ def callback():
         return redirect(
             "/?error="
             + urllib.parse.quote(
-                "Discord token exchange failed."
+                "Discord authorization failed."
             )
         )
+
+    # --------------------------------------------------------
+    # Parse token
+    # --------------------------------------------------------
 
     try:
 
@@ -492,7 +475,7 @@ def callback():
     except Exception:
 
         print(
-            "❌ Discord returned invalid JSON."
+            "❌ Discord returned invalid token JSON."
         )
 
         return redirect(
@@ -501,10 +484,6 @@ def callback():
                 "Invalid Discord response."
             )
         )
-
-    # --------------------------------------------------------
-    # Get tokens
-    # --------------------------------------------------------
 
     access_token = token.get(
         "access_token"
@@ -524,19 +503,19 @@ def callback():
     if not access_token:
 
         print(
-            "❌ No access token received."
+            "❌ Discord did not provide an access token."
         )
 
         return redirect(
             "/?error="
             + urllib.parse.quote(
-                "No access token received."
+                "No Discord access token received."
             )
         )
 
-    # --------------------------------------------------------
-    # Get Discord account
-    # --------------------------------------------------------
+    # ========================================================
+    # GET DISCORD USER
+    # ========================================================
 
     try:
 
@@ -545,8 +524,10 @@ def callback():
             f"{DISCORD_API}/users/@me",
 
             headers={
+
                 "Authorization":
                     f"Bearer {access_token}"
+
             },
 
             timeout=20
@@ -562,14 +543,18 @@ def callback():
         return redirect(
             "/?error="
             + urllib.parse.quote(
-                "Could not contact Discord."
+                "Could not retrieve your Discord account."
             )
         )
+
+    # --------------------------------------------------------
+    # User request failed
+    # --------------------------------------------------------
 
     if response.status_code != 200:
 
         print(
-            "❌ Could not get Discord user:",
+            "❌ Discord /users/@me failed:",
             response.status_code
         )
 
@@ -580,68 +565,82 @@ def callback():
         return redirect(
             "/?error="
             + urllib.parse.quote(
-                "Could not identify Discord account."
+                "Could not identify your Discord account."
             )
         )
 
+    # --------------------------------------------------------
+    # Discord user
+    # --------------------------------------------------------
+
     discord_user = response.json()
 
-    discord_user_id = str(
-        discord_user.get("id")
+    discord_user_id = discord_user.get(
+        "id"
     )
 
-    # --------------------------------------------------------
-    # Verify user
-    # --------------------------------------------------------
+    username = discord_user.get(
+        "username"
+    )
 
-    if discord_user_id != str(user_id):
-
-        print(
-            "❌ Discord account mismatch."
-        )
+    if not discord_user_id:
 
         print(
-            "Expected:",
-            user_id
-        )
-
-        print(
-            "Received:",
-            discord_user_id
+            "❌ Discord user ID missing."
         )
 
         return redirect(
             "/?error="
             + urllib.parse.quote(
-                "Discord account mismatch."
+                "Discord account ID was not received."
             )
         )
 
-    # --------------------------------------------------------
-    # Save authorization
-    # --------------------------------------------------------
+    discord_user_id = str(
+        discord_user_id
+    )
+
+    # ========================================================
+    # SAVE AUTHORIZED USER
+    # ========================================================
 
     expires_at = (
         int(time.time())
         + expires_in
     )
 
-    db = database()
+    created_at = int(
+        time.time()
+    )
 
+    db = database()
     cursor = db.cursor()
 
     cursor.execute("""
         INSERT INTO oauth_users (
+
             user_id,
+
+            username,
+
             access_token,
+
             refresh_token,
-            expires_at
+
+            expires_at,
+
+            created_at
+
         )
-        VALUES (?, ?, ?, ?)
+
+        VALUES (?, ?, ?, ?, ?, ?)
 
         ON CONFLICT(user_id)
 
         DO UPDATE SET
+
+            username =
+                excluded.username,
 
             access_token =
                 excluded.access_token,
@@ -652,45 +651,46 @@ def callback():
             expires_at =
                 excluded.expires_at
     """, (
-        str(user_id),
+
+        discord_user_id,
+
+        username,
+
         access_token,
+
         refresh_token,
-        expires_at
+
+        expires_at,
+
+        created_at
+
     ))
 
     db.commit()
     db.close()
 
-    # --------------------------------------------------------
-    # Success log
-    # --------------------------------------------------------
+    # ========================================================
+    # LOG
+    # ========================================================
 
     print()
     print("=" * 60)
-    print("🔐 DISCORD ACCOUNT AUTHORIZED")
+    print("✅ DISCORD USER AUTHORIZED")
     print("=" * 60)
-
     print(
         "Username:",
-        discord_user.get("username")
+        username
     )
-
     print(
         "User ID:",
         discord_user_id
     )
-
-    print(
-        "Expires:",
-        expires_at
-    )
-
     print("=" * 60)
     print()
 
-    # --------------------------------------------------------
-    # Back to website
-    # --------------------------------------------------------
+    # ========================================================
+    # RETURN TO WEBSITE
+    # ========================================================
 
     return redirect(
         "/?success=1"
@@ -698,7 +698,9 @@ def callback():
 
 
 # ============================================================
-# BOT API - GET ONE USER
+# BOT API
+#
+# GET ONE USER
 # ============================================================
 
 @app.route(
@@ -707,17 +709,19 @@ def callback():
 def get_oauth(user_id):
 
     # --------------------------------------------------------
-    # Security
+    # API security
     # --------------------------------------------------------
 
     if (
         not BOT_API_KEY
-        or request.headers.get("X-Bot-Key")
-        != BOT_API_KEY
+        or request.headers.get(
+            "X-Bot-Key"
+        ) != BOT_API_KEY
     ):
 
         return jsonify({
-            "error": "Unauthorized"
+            "error":
+                "Unauthorized"
         }), 401
 
     # --------------------------------------------------------
@@ -725,15 +729,19 @@ def get_oauth(user_id):
     # --------------------------------------------------------
 
     db = database()
-
     cursor = db.cursor()
 
     cursor.execute("""
         SELECT
+
             access_token,
+
             refresh_token,
+
             expires_at
+
         FROM oauth_users
+
         WHERE user_id = ?
     """, (
         str(user_id),
@@ -744,22 +752,26 @@ def get_oauth(user_id):
     db.close()
 
     # --------------------------------------------------------
-    # Not authorized
+    # User hasn't authorized
     # --------------------------------------------------------
 
     if not row:
 
         return jsonify({
-            "authorized": False
+
+            "authorized":
+                False
+
         })
 
     # --------------------------------------------------------
-    # Authorized
+    # User authorized
     # --------------------------------------------------------
 
     return jsonify({
 
-        "authorized": True,
+        "authorized":
+            True,
 
         "access_token":
             row[0],
@@ -774,7 +786,9 @@ def get_oauth(user_id):
 
 
 # ============================================================
-# BOT API - ALL AUTHORIZED USERS
+# BOT API
+#
+# GET ALL AUTHORIZED USERS
 # ============================================================
 
 @app.route(
@@ -783,17 +797,19 @@ def get_oauth(user_id):
 def authorized_users():
 
     # --------------------------------------------------------
-    # Security
+    # API security
     # --------------------------------------------------------
 
     if (
         not BOT_API_KEY
-        or request.headers.get("X-Bot-Key")
-        != BOT_API_KEY
+        or request.headers.get(
+            "X-Bot-Key"
+        ) != BOT_API_KEY
     ):
 
         return jsonify({
-            "error": "Unauthorized"
+            "error":
+                "Unauthorized"
         }), 401
 
     # --------------------------------------------------------
@@ -801,11 +817,11 @@ def authorized_users():
     # --------------------------------------------------------
 
     db = database()
-
     cursor = db.cursor()
 
     cursor.execute("""
-        SELECT user_id
+        SELECT
+            user_id
         FROM oauth_users
     """)
 
@@ -813,13 +829,12 @@ def authorized_users():
 
     db.close()
 
-    # --------------------------------------------------------
-    # Return users
-    # --------------------------------------------------------
-
     users = [
+
         str(row[0])
+
         for row in rows
+
     ]
 
     print(
@@ -827,8 +842,88 @@ def authorized_users():
     )
 
     return jsonify({
-        "users": users
+
+        "users":
+            users
+
     })
+
+
+# ============================================================
+# OPTIONAL API
+#
+# Check if a user is authorized.
+# Useful for your /auto page.
+# ============================================================
+
+@app.route(
+    "/api/check/<user_id>"
+)
+def check_authorized(user_id):
+
+    db = database()
+    cursor = db.cursor()
+
+    cursor.execute("""
+        SELECT
+            user_id,
+            username
+        FROM oauth_users
+        WHERE user_id = ?
+    """, (
+        str(user_id),
+    ))
+
+    row = cursor.fetchone()
+
+    db.close()
+
+    if not row:
+
+        return jsonify({
+
+            "authorized":
+                False
+
+        })
+
+    return jsonify({
+
+        "authorized":
+            True,
+
+        "user_id":
+            row[0],
+
+        "username":
+            row[1]
+
+    })
+
+
+# ============================================================
+# CLEAN OLD OAUTH STATES
+# ============================================================
+
+def cleanup_oauth_states():
+
+    cutoff = (
+        int(time.time())
+        - 3600
+    )
+
+    db = database()
+    cursor = db.cursor()
+
+    cursor.execute("""
+        DELETE FROM oauth_states
+        WHERE created_at < ?
+    """, (
+        cutoff,
+    ))
+
+    db.commit()
+    db.close()
 
 
 # ============================================================
@@ -844,18 +939,23 @@ if __name__ == "__main__":
         )
     )
 
+    cleanup_oauth_states()
+
     print()
     print("=" * 60)
     print("🌐 GIVEAWAY TRACKER WEBSITE")
     print("=" * 60)
     print(
-        f"Running on port {port}"
+        "Port:",
+        port
     )
     print(
-        f"Public URL: {PUBLIC_URL}"
+        "Public URL:",
+        PUBLIC_URL
     )
     print(
-        f"Database: {DATABASE}"
+        "Database:",
+        DATABASE
     )
     print("=" * 60)
     print()
