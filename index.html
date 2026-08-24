@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Giveaway Tracker</title>
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            background:
+                radial-gradient(
+                    circle at top,
+                    #26324d 0%,
+                    #111827 45%,
+                    #080b12 100%
+                );
+
+            font-family: Arial, sans-serif;
+            color: white;
+        }
+
+        .container {
+            width: calc(100% - 32px);
+            max-width: 480px;
+
+            background: rgba(31, 41, 55, 0.95);
+
+            border: 1px solid rgba(255,255,255,0.08);
+
+            border-radius: 24px;
+
+            padding: 36px 28px;
+
+            text-align: center;
+
+            box-shadow:
+                0 25px 80px rgba(0,0,0,0.45);
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+
+            margin: 0 auto 20px;
+
+            border-radius: 22px;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            font-size: 42px;
+
+            background: #5865F2;
+
+            box-shadow:
+                0 10px 30px rgba(88,101,242,0.35);
+        }
+
+        h1 {
+            margin: 0 0 10px;
+
+            font-size: 30px;
+        }
+
+        .subtitle {
+            margin: 0 auto 28px;
+
+            color: #9ca3af;
+
+            line-height: 1.6;
+        }
+
+        .authorize {
+            width: 100%;
+
+            border: 0;
+
+            border-radius: 14px;
+
+            padding: 16px;
+
+            background: #5865F2;
+
+            color: white;
+
+            font-size: 17px;
+            font-weight: bold;
+
+            cursor: pointer;
+
+            transition:
+                transform .15s,
+                background .15s;
+        }
+
+        .authorize:hover {
+            background: #4752c4;
+
+            transform: translateY(-2px);
+        }
+
+        .authorize:active {
+            transform: scale(.98);
+        }
+
+        .info {
+            margin-top: 24px;
+
+            padding: 15px;
+
+            border-radius: 14px;
+
+            background: rgba(255,255,255,0.04);
+
+            color: #9ca3af;
+
+            font-size: 14px;
+
+            line-height: 1.5;
+        }
+
+        .success {
+            color: #57F287;
+        }
+
+        .error {
+            color: #ED4245;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .spinner {
+            width: 24px;
+            height: 24px;
+
+            margin: 0 auto 18px;
+
+            border: 3px solid rgba(255,255,255,.2);
+
+            border-top-color: white;
+
+            border-radius: 50%;
+
+            animation: spin .8s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+    </style>
+</head>
+
+
+<body>
+
+<div class="container">
+
+    <div class="logo">
+        🤖
+    </div>
+
+
+    <h1>
+        Giveaway Tracker
+    </h1>
+
+
+    <p class="subtitle">
+        Connect your Discord account to enable
+        automatic giveaway joining.
+    </p>
+
+
+    <div id="normal">
+
+        <button
+            class="authorize"
+            onclick="authorize()"
+        >
+            🔐 Authorize with Discord
+        </button>
+
+
+        <div class="info">
+
+            You only need to authorize once.
+            After authorization, Giveaway Tracker
+            will remember your account.
+
+        </div>
+
+    </div>
+
+
+    <div
+        id="loading"
+        class="hidden"
+    >
+
+        <div class="spinner"></div>
+
+        <p>
+            Connecting to Discord...
+        </p>
+
+    </div>
+
+
+    <div
+        id="success"
+        class="hidden"
+    >
+
+        <h2 class="success">
+            ✅ Connected!
+        </h2>
+
+        <p>
+            Your Discord account has been
+            successfully authorized.
+        </p>
+
+        <div class="info">
+
+            You can close this page.
+            You do not need to run
+            <b>/auto_join</b> again.
+
+        </div>
+
+    </div>
+
+
+    <div
+        id="error"
+        class="hidden"
+    >
+
+        <h2 class="error">
+            ❌ Authorization Failed
+        </h2>
+
+        <p id="errorText">
+            Something went wrong.
+        </p>
+
+        <button
+            class="authorize"
+            onclick="location.href='/'"
+        >
+            Try Again
+        </button>
+
+    </div>
+
+</div>
+
+
+<script>
+
+function show(id) {
+
+    document
+        .getElementById("normal")
+        .classList.add("hidden");
+
+    document
+        .getElementById("loading")
+        .classList.add("hidden");
+
+    document
+        .getElementById("success")
+        .classList.add("hidden");
+
+    document
+        .getElementById("error")
+        .classList.add("hidden");
+
+
+    document
+        .getElementById(id)
+        .classList.remove("hidden");
+}
+
+
+function authorize() {
+
+    show("loading");
+
+    const params =
+        new URLSearchParams(
+            window.location.search
+        );
+
+    const userId =
+        params.get("user_id");
+
+
+    if (!userId) {
+
+        window.location.href =
+            "/start";
+
+        return;
+    }
+
+
+    window.location.href =
+        "/authorize?user_id="
+        + encodeURIComponent(userId);
+}
+
+
+const params =
+    new URLSearchParams(
+        window.location.search
+    );
+
+
+if (params.get("success") === "1") {
+
+    show("success");
+}
+
+
+if (params.get("error")) {
+
+    document
+        .getElementById("errorText")
+        .textContent =
+            params.get("error");
+
+    show("error");
+}
+
+</script>
+
+</body>
+
+</html>
