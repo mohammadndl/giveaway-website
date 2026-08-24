@@ -1,5 +1,3 @@
-# database.py
-
 import os
 import sqlite3
 import threading
@@ -15,120 +13,69 @@ _lock = threading.RLock()
 
 
 def _connect():
-
     conn = sqlite3.connect(
         DB_PATH,
         timeout=30
     )
-
     conn.row_factory = sqlite3.Row
-
     return conn
 
 
 def init_db():
-
     with _lock:
-
         with _connect() as conn:
-
             conn.executescript("""
+                CREATE TABLE IF NOT EXISTS auto_join (
+                    user_id TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    updated_at REAL NOT NULL
+                );
 
-            CREATE TABLE IF NOT EXISTS auto_join (
+                CREATE TABLE IF NOT EXISTS oauth_states (
+                    state TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    used INTEGER NOT NULL DEFAULT 0
+                );
 
-                user_id TEXT PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS oauth_users (
+                    user_id TEXT PRIMARY KEY,
+                    access_token TEXT NOT NULL,
+                    refresh_token TEXT,
+                    expires_at REAL,
+                    token_type TEXT,
+                    scope TEXT,
+                    updated_at REAL NOT NULL
+                );
 
-                enabled INTEGER NOT NULL DEFAULT 0,
-
-                updated_at REAL NOT NULL
-
-            );
-
-
-            CREATE TABLE IF NOT EXISTS oauth_states (
-
-                state TEXT PRIMARY KEY,
-
-                user_id TEXT NOT NULL,
-
-                created_at REAL NOT NULL,
-
-                used INTEGER NOT NULL DEFAULT 0
-
-            );
-
-
-            CREATE TABLE IF NOT EXISTS oauth_users (
-
-                user_id TEXT PRIMARY KEY,
-
-                access_token TEXT NOT NULL,
-
-                refresh_token TEXT,
-
-                expires_at REAL,
-
-                token_type TEXT,
-
-                scope TEXT,
-
-                updated_at REAL NOT NULL
-
-            );
-
-
-            CREATE TABLE IF NOT EXISTS detected_giveaways (
-
-                message_id TEXT PRIMARY KEY,
-
-                guild_id TEXT,
-
-                channel_id TEXT,
-
-                author_id TEXT,
-
-                detected_at REAL NOT NULL
-
-            );
-
+                CREATE TABLE IF NOT EXISTS detected_giveaways (
+                    message_id TEXT PRIMARY KEY,
+                    guild_id TEXT,
+                    channel_id TEXT,
+                    author_id TEXT,
+                    detected_at REAL NOT NULL
+                );
             """)
 
             conn.commit()
 
 
-def set_auto_join(
-    user_id: str,
-    enabled: bool
-):
-
+def set_auto_join(user_id, enabled):
     with _lock:
-
         with _connect() as conn:
-
             conn.execute(
                 """
                 INSERT INTO auto_join
-                (
-                    user_id,
-                    enabled,
-                    updated_at
-                )
-
+                    (user_id, enabled, updated_at)
                 VALUES (?, ?, ?)
-
                 ON CONFLICT(user_id)
                 DO UPDATE SET
-
-                    enabled =
-                        excluded.enabled,
-
-                    updated_at =
-                        excluded.updated_at
+                    enabled = excluded.enabled,
+                    updated_at = excluded.updated_at
                 """,
-
                 (
                     str(user_id),
-                    int(enabled),
+                    1 if enabled else 0,
                     time.time()
                 )
             )
@@ -136,23 +83,15 @@ def set_auto_join(
             conn.commit()
 
 
-def is_auto_join_enabled(
-    user_id: str
-):
-
+def is_auto_join_enabled(user_id):
     with _lock:
-
         with _connect() as conn:
-
             row = conn.execute(
                 """
                 SELECT enabled
-
                 FROM auto_join
-
-                WHERE user_id=?
+                WHERE user_id = ?
                 """,
-
                 (str(user_id),)
             ).fetchone()
 
@@ -162,29 +101,19 @@ def is_auto_join_enabled(
 
 
 def create_oauth_state(
-    state: str,
-    user_id: str
+    state,
+    user_id
 ):
-
     with _lock:
-
         with _connect() as conn:
-
             conn.execute(
                 """
                 INSERT INTO oauth_states
-                (
-                    state,
-                    user_id,
-                    created_at,
-                    used
-                )
-
+                    (state, user_id, created_at, used)
                 VALUES (?, ?, ?, 0)
                 """,
-
                 (
-                    state,
+                    str(state),
                     str(user_id),
                     time.time()
                 )
@@ -194,14 +123,12 @@ def create_oauth_state(
 
 
 def consume_oauth_state(
-    state: str,
-    max_age: int = 600
+    state,
+    max_age=600
 ):
-
     now = time.time()
 
     with _lock:
-
         with _connect() as conn:
 
             row = conn.execute(
@@ -210,34 +137,26 @@ def consume_oauth_state(
                     user_id,
                     created_at,
                     used
-
                 FROM oauth_states
-
-                WHERE state=?
+                WHERE state = ?
                 """,
-
-                (state,)
+                (str(state),)
             ).fetchone()
 
-            if not row:
+            if row is None:
                 return None
 
             if row["used"]:
                 return None
 
-            if (
-                now
-                - float(row["created_at"])
-                > max_age
-            ):
+            if now - float(row["created_at"]) > max_age:
 
                 conn.execute(
                     """
                     DELETE FROM oauth_states
-                    WHERE state=?
+                    WHERE state = ?
                     """,
-
-                    (state,)
+                    (str(state),)
                 )
 
                 conn.commit()
@@ -247,14 +166,11 @@ def consume_oauth_state(
             result = conn.execute(
                 """
                 UPDATE oauth_states
-
-                SET used=1
-
-                WHERE state=?
-                AND used=0
+                SET used = 1
+                WHERE state = ?
+                AND used = 0
                 """,
-
-                (state,)
+                (str(state),)
             )
 
             conn.commit()
@@ -262,28 +178,22 @@ def consume_oauth_state(
             if result.rowcount != 1:
                 return None
 
-            return str(
-                row["user_id"]
-            )
+            return str(row["user_id"])
 
 
 def save_oauth_user(
-    user_id: str,
-    access_token: str,
+    user_id,
+    access_token,
     refresh_token=None,
     expires_at=None,
     token_type=None,
     scope=None
 ):
-
     with _lock:
-
         with _connect() as conn:
-
             conn.execute(
                 """
-                INSERT INTO oauth_users
-                (
+                INSERT INTO oauth_users (
                     user_id,
                     access_token,
                     refresh_token,
@@ -292,12 +202,10 @@ def save_oauth_user(
                     scope,
                     updated_at
                 )
-
                 VALUES (?, ?, ?, ?, ?, ?, ?)
 
                 ON CONFLICT(user_id)
                 DO UPDATE SET
-
                     access_token =
                         excluded.access_token,
 
@@ -316,7 +224,6 @@ def save_oauth_user(
                     updated_at =
                         excluded.updated_at
                 """,
-
                 (
                     str(user_id),
                     access_token,
@@ -331,71 +238,50 @@ def save_oauth_user(
             conn.commit()
 
 
-def get_oauth_user(
-    user_id: str
-):
-
+def get_oauth_user(user_id):
     with _lock:
-
         with _connect() as conn:
-
             row = conn.execute(
                 """
                 SELECT *
-
                 FROM oauth_users
-
-                WHERE user_id=?
+                WHERE user_id = ?
                 """,
-
                 (str(user_id),)
             ).fetchone()
 
-            if not row:
+            if row is None:
                 return None
 
             return dict(row)
 
 
-def is_user_authorized(
-    user_id: str
-):
-
+def is_user_authorized(user_id):
     return (
-        get_oauth_user(
-            str(user_id)
-        )
+        get_oauth_user(user_id)
         is not None
     )
 
 
 def mark_giveaway_detected(
-    message_id: str,
+    message_id,
     guild_id=None,
     channel_id=None,
     author_id=None
 ):
-
     with _lock:
-
         with _connect() as conn:
-
             result = conn.execute(
                 """
-                INSERT OR IGNORE INTO
-                detected_giveaways
-
-                (
+                INSERT OR IGNORE INTO detected_giveaways (
                     message_id,
                     guild_id,
                     channel_id,
                     author_id,
                     detected_at
                 )
-
                 VALUES (?, ?, ?, ?, ?)
                 """,
-
                 (
                     str(message_id),
 
@@ -421,22 +307,16 @@ def mark_giveaway_detected(
 
 
 def giveaway_already_detected(
-    message_id: str
+    message_id
 ):
-
     with _lock:
-
         with _connect() as conn:
-
             row = conn.execute(
                 """
                 SELECT 1
-
                 FROM detected_giveaways
-
-                WHERE message_id=?
+                WHERE message_id = ?
                 """,
-
                 (str(message_id),)
             ).fetchone()
 

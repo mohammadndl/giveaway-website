@@ -1,5 +1,3 @@
-# oauth_server.py
-
 import os
 import secrets
 import time
@@ -25,7 +23,6 @@ _site = None
 
 
 def init_oauth():
-
     global CLIENT_ID
     global CLIENT_SECRET
     global PUBLIC_URL
@@ -51,28 +48,19 @@ def init_oauth():
         or os.getenv("OAUTH_PORT", "8080")
     )
 
-    missing = []
-
     if not CLIENT_ID:
-        missing.append(
-            "DISCORD_CLIENT_ID"
+        raise RuntimeError(
+            "DISCORD_CLIENT_ID is missing."
         )
 
     if not CLIENT_SECRET:
-        missing.append(
-            "DISCORD_CLIENT_SECRET"
+        raise RuntimeError(
+            "DISCORD_CLIENT_SECRET is missing."
         )
 
     if not PUBLIC_URL:
-        missing.append(
-            "PUBLIC_URL"
-        )
-
-    if missing:
-
         raise RuntimeError(
-            "Missing environment variables: "
-            + ", ".join(missing)
+            "PUBLIC_URL is missing."
         )
 
     database.init_db()
@@ -82,90 +70,59 @@ def init_oauth():
     )
 
     print(
-        f"[OAUTH] Redirect URI: "
-        f"{redirect_uri()}"
+        f"[OAUTH] Callback: {redirect_uri()}"
     )
 
 
 def redirect_uri():
-
     return (
-        f"{PUBLIC_URL}"
-        "/oauth/callback"
+        f"{PUBLIC_URL}/oauth/callback"
     )
 
 
 def create_authorization_url(
-    user_id: str
+    user_id
 ):
-
     user_id = str(user_id)
 
     state = secrets.token_urlsafe(48)
 
+    # IMPORTANT:
+    # positional arguments match database.py exactly.
     database.create_oauth_state(
         state,
         user_id
     )
 
     params = {
+        "client_id": CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": redirect_uri(),
 
-        "client_id":
-            CLIENT_ID,
+        # User Install.
+        "scope": "identify applications.commands",
 
-        "response_type":
-            "code",
+        "state": state,
 
-        "redirect_uri":
-            redirect_uri(),
+        # Discord User Install.
+        "integration_type": "1",
 
-        "scope":
-            "identify applications.commands",
-
-        "state":
-            state,
-
-        # Discord User Install
-        "integration_type":
-            "1",
-
-        "prompt":
-            "consent",
+        "prompt": "consent"
     }
 
-    url = (
+    return (
         "https://discord.com/oauth2/authorize?"
         + urlencode(params)
     )
 
-    print(
-        f"[OAUTH] Authorization URL created "
-        f"for user {user_id}"
-    )
 
-    return url
-
-
-async def exchange_code(
-    code: str
-):
-
+async def exchange_code(code):
     data = {
-
-        "client_id":
-            CLIENT_ID,
-
-        "client_secret":
-            CLIENT_SECRET,
-
-        "grant_type":
-            "authorization_code",
-
-        "code":
-            code,
-
-        "redirect_uri":
-            redirect_uri(),
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri()
     }
 
     async with aiohttp.ClientSession() as session:
@@ -180,15 +137,13 @@ async def exchange_code(
             if response.status != 200:
 
                 print(
-                    "[OAUTH] Token exchange failed"
+                    f"[OAUTH] Token HTTP "
+                    f"{response.status}"
                 )
 
                 print(
-                    f"HTTP: {response.status}"
-                )
-
-                print(
-                    f"Response: {body[:1000]}"
+                    f"[OAUTH] Response: "
+                    f"{body[:1000]}"
                 )
 
                 raise RuntimeError(
@@ -199,9 +154,8 @@ async def exchange_code(
 
 
 async def get_discord_user(
-    access_token: str
+    access_token
 ):
-
     headers = {
         "Authorization":
             f"Bearer {access_token}"
@@ -225,65 +179,37 @@ async def get_discord_user(
             if response.status != 200:
 
                 print(
-                    "[OAUTH] /users/@me failed"
+                    f"[OAUTH] User lookup HTTP "
+                    f"{response.status}"
                 )
 
                 print(
-                    f"HTTP: {response.status}"
-                )
-
-                print(
-                    f"Response: {body[:1000]}"
+                    f"[OAUTH] Response: "
+                    f"{body[:1000]}"
                 )
 
                 raise RuntimeError(
-                    "Discord user verification failed."
+                    "Discord user lookup failed."
                 )
 
             return await response.json()
 
 
-async def oauth_callback(
-    request: web.Request
-):
-
-    state = request.query.get(
-        "state"
-    )
-
-    code = request.query.get(
-        "code"
-    )
-
-    error = request.query.get(
-        "error"
-    )
+async def oauth_callback(request):
+    state = request.query.get("state")
+    code = request.query.get("code")
+    error = request.query.get("error")
 
     if error:
-
         return web.Response(
             status=400,
-            text=(
-                "Authorization cancelled."
-            )
+            text="Authorization was cancelled."
         )
 
-    if not state:
-
+    if not state or not code:
         return web.Response(
             status=400,
-            text=(
-                "Invalid OAuth state."
-            )
-        )
-
-    if not code:
-
-        return web.Response(
-            status=400,
-            text=(
-                "Missing authorization code."
-            )
+            text="Invalid OAuth request."
         )
 
     expected_user_id = (
@@ -303,56 +229,39 @@ async def oauth_callback(
             status=400,
             text=(
                 "Invalid OAuth state. "
-                "Please run /auto_join on again."
+                "Run /auto_join on again."
             )
         )
-
-    expected_user_id = str(
-        expected_user_id
-    )
 
     try:
 
-        token_data = (
-            await exchange_code(
-                code
-            )
+        token_data = await exchange_code(
+            code
         )
 
-        access_token = (
-            token_data.get(
-                "access_token"
-            )
+        access_token = token_data.get(
+            "access_token"
         )
 
-        refresh_token = (
-            token_data.get(
-                "refresh_token"
-            )
+        refresh_token = token_data.get(
+            "refresh_token"
         )
 
-        expires_in = (
-            token_data.get(
-                "expires_in"
-            )
+        expires_in = token_data.get(
+            "expires_in"
         )
 
-        token_type = (
-            token_data.get(
-                "token_type"
-            )
+        token_type = token_data.get(
+            "token_type"
         )
 
-        scope = (
-            token_data.get(
-                "scope"
-            )
+        scope = token_data.get(
+            "scope"
         )
 
         if not access_token:
-
             raise RuntimeError(
-                "Discord returned no access token."
+                "No OAuth access token returned."
             )
 
         discord_user = (
@@ -362,29 +271,22 @@ async def oauth_callback(
         )
 
         returned_user_id = str(
-            discord_user.get(
-                "id"
-            )
+            discord_user["id"]
         )
 
-        if returned_user_id != expected_user_id:
+        if returned_user_id != str(
+            expected_user_id
+        ):
 
             print(
-                "[OAUTH] USER ID MISMATCH"
-            )
-
-            print(
-                f"Expected: {expected_user_id}"
-            )
-
-            print(
-                f"Returned: {returned_user_id}"
+                "[OAUTH] User ID mismatch."
             )
 
             return web.Response(
                 status=403,
                 text=(
-                    "Discord account mismatch."
+                    "The authorized Discord "
+                    "account does not match."
                 )
             )
 
@@ -393,18 +295,15 @@ async def oauth_callback(
         if expires_in is not None:
 
             try:
-
                 expires_at = (
                     time.time()
                     + int(expires_in)
                 )
-
             except (
                 TypeError,
                 ValueError
             ):
-
-                pass
+                expires_at = None
 
         database.save_oauth_user(
             user_id=expected_user_id,
@@ -421,114 +320,67 @@ async def oauth_callback(
         )
 
         print(
-            "[OAUTH] User App authorized"
-        )
-
-        print(
-            f"[OAUTH] Auto Join enabled "
-            f"for user {expected_user_id}"
+            f"[OAUTH] User App authorized: "
+            f"{expected_user_id}"
         )
 
         return web.Response(
-
             status=200,
-
             content_type="text/html",
-
             text="""
 <!DOCTYPE html>
-
 <html>
-
 <head>
-
 <meta charset="UTF-8">
-
 <title>Giveaway Tracker</title>
-
 <style>
-
 body {
     margin: 0;
     min-height: 100vh;
-
     display: flex;
-    justify-content: center;
     align-items: center;
-
+    justify-content: center;
     background: #111827;
-
     color: white;
-
     font-family: Arial, sans-serif;
 }
-
 .box {
-
     width: 90%;
-    max-width: 500px;
-
+    max-width: 520px;
     padding: 40px;
-
-    border-radius: 20px;
-
     text-align: center;
-
+    border-radius: 20px;
     background: #1f2937;
-
-    box-shadow:
-        0 20px 60px
-        rgba(0,0,0,.4);
+    box-shadow: 0 20px 60px rgba(0,0,0,.4);
 }
-
 .icon {
-    font-size: 60px;
+    font-size: 64px;
 }
-
 h1 {
     color: #4ade80;
 }
-
 p {
     color: #d1d5db;
     line-height: 1.6;
 }
-
 </style>
-
 </head>
-
 <body>
-
 <div class="box">
-
-<div class="icon">
-🎉
-</div>
-
-<h1>
-Giveaway Tracker Authorized!
-</h1>
-
+<div class="icon">🎉</div>
+<h1>Giveaway Tracker Authorized!</h1>
 <p>
-Giveaway Tracker has been added
-to your Discord User Apps.
+Giveaway Tracker has been added to
+your Discord User Apps.
 </p>
-
 <p>
-<strong>
-Auto Join is now enabled.
-</strong>
+<strong>Auto Join is now enabled.</strong>
 </p>
-
 <p>
 You can close this page.
 </p>
-
 </div>
-
 </body>
-
 </html>
 """
         )
@@ -536,30 +388,21 @@ You can close this page.
     except Exception as exc:
 
         print(
-            "[OAUTH ERROR]"
-        )
-
-        print(
+            f"[OAUTH ERROR] "
             f"{type(exc).__name__}: {exc}"
         )
 
         return web.Response(
             status=500,
             text=(
-                "OAuth authorization failed. "
-                "Check the bot logs."
+                "OAuth authorization failed."
             )
         )
 
 
-async def health(
-    request: web.Request
-):
-
+async def health(request):
     return web.Response(
-        text=(
-            "Giveaway Tracker OAuth server is online."
-        )
+        text="Giveaway Tracker OAuth server is online."
     )
 
 
@@ -569,7 +412,6 @@ async def start_oauth_server():
     global _site
 
     if _runner is not None:
-
         return
 
     app = web.Application()
@@ -584,9 +426,7 @@ async def start_oauth_server():
         oauth_callback
     )
 
-    _runner = web.AppRunner(
-        app
-    )
+    _runner = web.AppRunner(app)
 
     await _runner.setup()
 
@@ -599,11 +439,5 @@ async def start_oauth_server():
     await _site.start()
 
     print(
-        f"[OAUTH] Server running "
-        f"on port {PORT}"
-    )
-
-    print(
-        f"[OAUTH] Callback: "
-        f"{redirect_uri()}"
+        f"[OAUTH] Server listening on {PORT}"
     )
