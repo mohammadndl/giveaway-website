@@ -3,25 +3,20 @@ import sqlite3
 import threading
 import time
 
-
-DB_PATH = os.getenv(
-    "DATABASE_PATH",
-    "giveaway_tracker.db"
-)
+DB_PATH = os.getenv("DATABASE_PATH", "giveaway_tracker.db")
 
 LOCK = threading.RLock()
 
 
 def connect():
-
-    connection = sqlite3.connect(
+    conn = sqlite3.connect(
         DB_PATH,
         timeout=30
     )
 
-    connection.row_factory = sqlite3.Row
+    conn.row_factory = sqlite3.Row
 
-    return connection
+    return conn
 
 
 def init_db():
@@ -30,8 +25,7 @@ def init_db():
 
         with connect() as conn:
 
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS auto_join (
                     user_id TEXT PRIMARY KEY,
                     enabled INTEGER NOT NULL DEFAULT 0,
@@ -52,13 +46,13 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS participants (
                     giveaway_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
+
                     PRIMARY KEY (
                         giveaway_id,
                         user_id
                     )
                 );
-                """
-            )
+            """)
 
             conn.commit()
 
@@ -86,11 +80,8 @@ def set_auto_join(
 
                 ON CONFLICT(user_id)
                 DO UPDATE SET
-                    enabled =
-                        excluded.enabled,
-
-                    updated_at =
-                        excluded.updated_at
+                    enabled = excluded.enabled,
+                    updated_at = excluded.updated_at
                 """,
                 (
                     str(user_id),
@@ -128,6 +119,26 @@ def auto_join_enabled(
             return bool(
                 row["enabled"]
             )
+
+
+def get_auto_join_users():
+
+    with LOCK:
+
+        with connect() as conn:
+
+            rows = conn.execute(
+                """
+                SELECT user_id
+                FROM auto_join
+                WHERE enabled = 1
+                """
+            ).fetchall()
+
+            return [
+                int(row["user_id"])
+                for row in rows
+            ]
 
 
 def giveaway_exists(
@@ -180,7 +191,9 @@ def save_giveaway(
                 """,
                 (
                     str(message_id),
-                    str(guild_id),
+                    str(guild_id)
+                    if guild_id is not None
+                    else None,
                     str(channel_id),
                     jump_url,
                     prize,
@@ -262,6 +275,6 @@ def get_participants(
             ).fetchall()
 
             return [
-                str(row["user_id"])
+                int(row["user_id"])
                 for row in rows
             ]

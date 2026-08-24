@@ -15,8 +15,18 @@ TARGET_GIVEAWAY_BOT_ID = (
 )
 
 
-def setup(bot):
-    pass
+def setup(
+    bot
+):
+
+    print(
+        "[DETECTOR] Ready."
+    )
+
+    print(
+        "[DETECTOR] Target bot: "
+        f"{TARGET_GIVEAWAY_BOT_ID or 'ALL BOTS'}"
+    )
 
 
 def get_message_text(
@@ -76,11 +86,13 @@ def get_message_text(
             )
 
             if label:
+
                 parts.append(
                     str(label)
                 )
 
             if custom_id:
+
                 parts.append(
                     str(custom_id)
                 )
@@ -95,6 +107,7 @@ def looks_like_giveaway(
 ):
 
     if not message.author.bot:
+
         return False
 
     if (
@@ -113,11 +126,15 @@ def looks_like_giveaway(
 
     score = 0
 
+    # Embed is a strong giveaway signal.
     if message.embeds:
+
         score += 2
 
+    # Timing/countdown.
     if re.search(
-        r"\b\d+\s*(s|sec|secs|second|seconds|"
+        r"\b\d+\s*"
+        r"(s|sec|secs|second|seconds|"
         r"m|min|mins|minute|minutes|"
         r"h|hr|hrs|hour|hours|"
         r"d|day|days)\b",
@@ -127,6 +144,7 @@ def looks_like_giveaway(
 
         score += 2
 
+    # Winner count.
     if re.search(
         r"\b\d+\s*winners?\b",
         text,
@@ -135,21 +153,35 @@ def looks_like_giveaway(
 
         score += 2
 
-    giveaway_words = (
-        "giveaway",
-        "enter giveaway",
-        "enter to win",
-        "click to enter",
-        "join giveaway"
-    )
-
+    # Participant/entry information.
     if any(
         word in lower
-        for word in giveaway_words
+        for word in (
+            "participants",
+            "participant",
+            "entries",
+            "entries:",
+            "enter"
+        )
     ):
 
         score += 2
 
+    # Giveaway structural words.
+    if any(
+        word in lower
+        for word in (
+            "giveaway",
+            "enter giveaway",
+            "enter to win",
+            "click to enter",
+            "join giveaway"
+        )
+    ):
+
+        score += 2
+
+    # Giveaway-style buttons.
     for row in message.components:
 
         for component in row.children:
@@ -170,7 +202,8 @@ def looks_like_giveaway(
                 for word in (
                     "enter",
                     "join",
-                    "giveaway"
+                    "giveaway",
+                    "participate"
                 )
             ):
 
@@ -183,46 +216,50 @@ def extract_prize(
     message
 ):
 
-    if message.embeds:
+    if not message.embeds:
 
-        embed = message.embeds[0]
+        return "Unknown prize"
 
-        if embed.title:
+    embed = message.embeds[0]
 
-            title = embed.title.strip()
+    if embed.title:
 
-            if (
-                "giveaway"
-                not in title.lower()
-            ):
+        title = embed.title.strip()
 
-                return title[:200]
+        if (
+            "giveaway"
+            not in title.lower()
+        ):
 
-        if embed.description:
+            return title[:200]
 
-            lines = [
-                line.strip()
-                for line
-                in embed.description.splitlines()
-                if line.strip()
-            ]
+    if embed.description:
 
-            for line in lines:
+        lines = [
+            line.strip()
+            for line
+            in embed.description.splitlines()
+            if line.strip()
+        ]
 
-                if "prize" in line.lower():
+        for line in lines:
 
-                    value = re.sub(
-                        r"^.*?prize\s*[:\-]?\s*",
-                        "",
-                        line,
-                        flags=re.IGNORECASE
-                    ).strip()
+            if "prize" in line.lower():
 
-                    if value:
-                        return value[:200]
+                value = re.sub(
+                    r"^.*?prize\s*[:\-]?\s*",
+                    "",
+                    line,
+                    flags=re.IGNORECASE
+                ).strip()
 
-            if lines:
-                return lines[0][:200]
+                if value:
+
+                    return value[:200]
+
+        if lines:
+
+            return lines[0][:200]
 
     return "Unknown prize"
 
@@ -251,11 +288,13 @@ def extract_winner_count(
         if match:
 
             try:
+
                 return int(
                     match.group(1)
                 )
 
             except ValueError:
+
                 pass
 
     return None
@@ -269,6 +308,7 @@ def extract_invite(
         message
     )
 
+    # Search message/embed text.
     match = re.search(
         r"https?://"
         r"(?:discord\.gg|discord\.com/invite)"
@@ -278,7 +318,72 @@ def extract_invite(
     )
 
     if match:
+
         return match.group(0)
+
+    # Search link buttons.
+    for row in message.components:
+
+        for component in row.children:
+
+            url = getattr(
+                component,
+                "url",
+                None
+            )
+
+            if not url:
+                continue
+
+            if (
+                "discord.gg/"
+                in url
+                or
+                "discord.com/invite/"
+                in url
+            ):
+
+                return url
+
+    return None
+
+
+async def get_user_for_dm(
+    bot,
+    user_id
+):
+
+    try:
+
+        # IMPORTANT:
+        #
+        # Do NOT search guild.members.
+        #
+        # fetch_user() retrieves the Discord user
+        # directly from their ID.
+        #
+        # This allows users who enabled Auto Join
+        # to be notified even if they are not in one
+        # of the bot's servers.
+
+        return await bot.fetch_user(
+            int(user_id)
+        )
+
+    except discord.NotFound:
+
+        print(
+            f"[AUTO JOIN] "
+            f"User {user_id} not found."
+        )
+
+    except discord.HTTPException as error:
+
+        print(
+            f"[AUTO JOIN] "
+            f"Could not fetch {user_id}: "
+            f"{error}"
+        )
 
     return None
 
@@ -290,91 +395,114 @@ async def notify_auto_join_users(
     invite_url
 ):
 
-    notified = set()
+    bot = message.client
 
-    for guild in message.client.guilds:
+    user_ids = (
+        database.get_auto_join_users()
+    )
 
-        for member in guild.members:
+    print(
+        "[AUTO JOIN] "
+        f"{len(user_ids)} enabled user(s)."
+    )
 
-            if member.bot:
-                continue
+    for user_id in user_ids:
 
-            if member.id in notified:
-                continue
+        user = await get_user_for_dm(
+            bot,
+            user_id
+        )
 
-            if not database.auto_join_enabled(
-                member.id
-            ):
-                continue
+        if user is None:
 
-            notified.add(
-                member.id
+            continue
+
+        embed = discord.Embed(
+            title="🎉 GIVEAWAY DETECTED!",
+            description=(
+                f"🎁 **Prize:** "
+                f"{prize}\n\n"
+
+                f"🏆 **Winners:** "
+                f"`{winner_count or 'Unknown'}`\n\n"
+
+                f"📍 **Server:** "
+                f"{message.guild.name "
+                if message.guild
+                else "Unknown"
+                }"
+                "\n\n"
+                "Join the server and enter "
+                "the giveaway!"
             )
+        )
 
-            embed = discord.Embed(
-                title="🎉 GIVEAWAY DETECTED!",
-                description=(
-                    f"🎁 **Prize:** "
-                    f"{prize}\n\n"
+        embed.set_footer(
+            text="Giveaway Tracker • Auto Join"
+        )
 
-                    f"🏆 **Winners:** "
-                    f"`{winner_count or 'Unknown'}`\n\n"
+        view = discord.ui.View(
+            timeout=None
+        )
 
-                    f"📍 **Server:** "
-                    f"{message.guild.name}\n\n"
-
-                    "Join the server and enter "
-                    "the giveaway."
-                )
-            )
-
-            view = discord.ui.View(
-                timeout=None
-            )
-
-            if invite_url:
-
-                view.add_item(
-                    discord.ui.Button(
-                        label="Join Server",
-                        style=discord.ButtonStyle.link,
-                        url=invite_url
-                    )
-                )
+        # Server invite.
+        if invite_url:
 
             view.add_item(
                 discord.ui.Button(
-                    label="Open Giveaway",
+                    label="Join Server",
+                    emoji="🔗",
                     style=discord.ButtonStyle.link,
-                    url=message.jump_url
+                    url=invite_url
                 )
             )
 
-            try:
+        else:
 
-                await member.send(
-                    embed=embed,
-                    view=view
-                )
+            print(
+                "[AUTO JOIN] "
+                f"No server invite found for "
+                f"giveaway {message.id}"
+            )
 
-                print(
-                    f"[DM] Giveaway sent to "
-                    f"{member} ({member.id})"
-                )
+        # Direct giveaway message.
+        view.add_item(
+            discord.ui.Button(
+                label="Open Giveaway",
+                emoji="🎉",
+                style=discord.ButtonStyle.link,
+                url=message.jump_url
+            )
+        )
 
-            except discord.Forbidden:
+        try:
 
-                print(
-                    f"[DM] Cannot DM "
-                    f"{member.id}"
-                )
+            await user.send(
+                embed=embed,
+                view=view
+            )
 
-            except discord.HTTPException as e:
+            print(
+                "[AUTO JOIN] "
+                f"DM sent to {user_id}"
+            )
 
-                print(
-                    f"[DM ERROR] "
-                    f"{member.id}: {e}"
-                )
+        except discord.Forbidden:
+
+            print(
+                "[AUTO JOIN] "
+                f"Cannot DM {user_id}. "
+                "The user may have DMs disabled "
+                "or blocked the bot."
+            )
+
+        except discord.HTTPException as error:
+
+            print(
+                "[AUTO JOIN] "
+                f"DM error for {user_id}: "
+                f"{error}"
+            )
 
 
 async def detect_winner(
@@ -387,31 +515,32 @@ async def detect_winner(
 
     lower = text.lower()
 
-    winner_words = (
-        "winner",
-        "won",
-        "congratulations",
-        "congrats"
-    )
-
     if not any(
         word in lower
-        for word in winner_words
+        for word in (
+            "winner",
+            "won",
+            "congratulations",
+            "congrats"
+        )
     ):
 
         return
 
     if not message.mentions:
+
         return
 
     for user in message.mentions:
 
         if user.bot:
+
             continue
 
         if not database.auto_join_enabled(
             user.id
         ):
+
             continue
 
         try:
@@ -424,22 +553,22 @@ async def detect_winner(
             )
 
             print(
-                f"[WINNER] "
+                "[WINNER] "
                 f"DM sent to {user.id}"
             )
 
         except discord.Forbidden:
 
             print(
-                f"[WINNER] Cannot DM "
-                f"{user.id}"
+                "[WINNER] "
+                f"Cannot DM {user.id}"
             )
 
-        except discord.HTTPException as e:
+        except discord.HTTPException as error:
 
             print(
-                f"[WINNER ERROR] "
-                f"{user.id}: {e}"
+                "[WINNER ERROR] "
+                f"{user.id}: {error}"
             )
 
 
@@ -448,20 +577,22 @@ async def process_message(
 ):
 
     if not message.author.bot:
+
         return
 
-    # Winner detection is separate from
-    # giveaway detection.
+    # Check winner announcements.
     await detect_winner(
         message
     )
 
+    # Check whether this is a giveaway.
     if not looks_like_giveaway(
         message
     ):
 
         return
 
+    # Never process the same giveaway twice.
     if database.giveaway_exists(
         message.id
     ):
@@ -493,13 +624,18 @@ async def process_message(
         winners=winner_count
     )
 
+    print("=" * 60)
+
     print(
-        "🎉 [GIVEAWAY DETECTED]"
+        "🎉 GIVEAWAY DETECTED"
     )
 
     print(
         f"Server: "
-        f"{message.guild.name if message.guild else 'Unknown'}"
+        f"{message.guild.name "
+        if message.guild
+        else "Unknown"
+        }"
     )
 
     print(
@@ -516,12 +652,14 @@ async def process_message(
 
     print(
         f"Invite: "
-        f"{invite_url or 'Not found'}"
+        f"{invite_url or 'NOT FOUND'}"
     )
 
+    print("=" * 60)
+
     await notify_auto_join_users(
-        message,
-        prize,
-        winner_count,
-        invite_url
+        message=message,
+        prize=prize,
+        winner_count=winner_count,
+        invite_url=invite_url
     )

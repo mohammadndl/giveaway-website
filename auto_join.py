@@ -6,22 +6,23 @@ import database
 
 auto_join_group = app_commands.Group(
     name="auto_join",
-    description="Control giveaway Auto Join."
+    description="Control Giveaway Tracker Auto Join."
 )
 
 
 @auto_join_group.command(
     name="on",
-    description="Enable Auto Join."
+    description="Turn Auto Join on."
 )
 async def auto_join_on(
     interaction: discord.Interaction
 ):
 
+    # Auto Join is a DM-only command.
     if interaction.guild is not None:
 
         await interaction.response.send_message(
-            "❌ You need to DM me and use "
+            "❌ You must DM me and use "
             "`/auto_join on` there.",
             ephemeral=True
         )
@@ -35,19 +36,21 @@ async def auto_join_on(
 
     await interaction.response.send_message(
         "✅ **Auto Join is ON!**\n\n"
-        "I'll notify you when I detect a giveaway "
-        "and send you the server and giveaway link."
+        "When I detect a giveaway, I'll DM you "
+        "with the server invite and the direct "
+        "giveaway message."
     )
 
     print(
-        f"[AUTO JOIN] "
-        f"Enabled for {interaction.user.id}"
+        f"[AUTO JOIN] ON: "
+        f"{interaction.user} "
+        f"({interaction.user.id})"
     )
 
 
 @auto_join_group.command(
     name="off",
-    description="Disable Auto Join."
+    description="Turn Auto Join off."
 )
 async def auto_join_off(
     interaction: discord.Interaction
@@ -56,7 +59,7 @@ async def auto_join_off(
     if interaction.guild is not None:
 
         await interaction.response.send_message(
-            "❌ You need to DM me and use "
+            "❌ You must DM me and use "
             "`/auto_join off` there.",
             ephemeral=True
         )
@@ -73,8 +76,9 @@ async def auto_join_off(
     )
 
     print(
-        f"[AUTO JOIN] "
-        f"Disabled for {interaction.user.id}"
+        f"[AUTO JOIN] OFF: "
+        f"{interaction.user} "
+        f"({interaction.user.id})"
     )
 
 

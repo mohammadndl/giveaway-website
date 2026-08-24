@@ -55,8 +55,7 @@ def format_remaining(
     seconds = max(
         0,
         int(
-            end_time
-            - time.time()
+            end_time - time.time()
         )
     )
 
@@ -110,9 +109,15 @@ class Giveaway:
     ):
 
         self.channel = channel
+
         self.host = host
+
         self.prize = prize
-        self.winner_count = winner_count
+
+        self.winner_count = (
+            winner_count
+        )
+
         self.end_time = end_time
 
         self.message = None
@@ -128,11 +133,11 @@ def make_embed(
 
     if giveaway.ended:
 
-        time_text = "ENDED"
+        time_left = "ENDED"
 
     else:
 
-        time_text = format_remaining(
+        time_left = format_remaining(
             giveaway.end_time
         )
 
@@ -142,7 +147,7 @@ def make_embed(
             f"## 🎁 {giveaway.prize}\n\n"
 
             f"⏳ **Time Left:** "
-            f"`{time_text}`\n\n"
+            f"`{time_left}`\n\n"
 
             f"👥 **Participants:** "
             f"`{len(giveaway.participants)}`\n\n"
@@ -370,73 +375,116 @@ async def finish_giveaway(
 
         winners = []
 
+    # Disable buttons.
     await update_giveaway(
         giveaway
     )
 
     if not winners:
 
-        content = (
+        result_text = (
             "🎉 **Giveaway Ended!**\n\n"
             f"🎁 **Prize:** "
             f"{giveaway.prize}\n\n"
-            "😢 Nobody entered."
+            "😢 **Nobody entered.**"
         )
 
     else:
 
-        mentions = ", ".join(
+        winner_mentions = ", ".join(
             f"<@{user_id}>"
             for user_id in winners
         )
 
-        content = (
+        result_text = (
             "🎉 **Giveaway Ended!**\n\n"
             f"🎁 **Prize:** "
             f"{giveaway.prize}\n\n"
             f"🏆 **Winner"
             f"{'s' if len(winners) != 1 else ''}:** "
-            f"{mentions}"
+            f"{winner_mentions}"
         )
 
     try:
 
         result_message = (
             await giveaway.channel.send(
-                content
+                result_text
             )
         )
 
-        # DM every winner with the exact
-        # giveaway message link.
-        for user_id in winners:
-
-            try:
-
-                user = await giveaway.channel.guild.fetch_member(
-                    user_id
-                )
-
-                await user.send(
-                    "🏆 **YOU WON!**\n\n"
-                    f"🎁 **Prize:** "
-                    f"{giveaway.prize}\n\n"
-                    f"🔗 **Giveaway message:**\n"
-                    f"{giveaway.message.jump_url if giveaway.message else result_message.jump_url}"
-                )
-
-            except (
-                discord.NotFound,
-                discord.Forbidden,
-                discord.HTTPException
-            ):
-                pass
-
     except (
+        discord.NotFound,
         discord.Forbidden,
         discord.HTTPException
     ):
-        pass
+
+        result_message = None
+
+    # DM winners.
+    #
+    # This does NOT add them to a server.
+    # It only sends the winner DM.
+    for user_id in winners:
+
+        try:
+
+            user = await giveaway.channel.guild.fetch_member(
+                user_id
+            )
+
+            if giveaway.message:
+
+                message_link = (
+                    giveaway.message.jump_url
+                )
+
+            elif result_message:
+
+                message_link = (
+                    result_message.jump_url
+                )
+
+            else:
+
+                message_link = (
+                    "The giveaway message "
+                    "is no longer available."
+                )
+
+            await user.send(
+                "🏆 **YOU WON!**\n\n"
+                f"🎁 **Prize:** "
+                f"{giveaway.prize}\n\n"
+                f"🔗 **Giveaway message:**\n"
+                f"{message_link}"
+            )
+
+            print(
+                f"[WINNER] "
+                f"DM sent to {user_id}"
+            )
+
+        except discord.Forbidden:
+
+            print(
+                f"[WINNER] "
+                f"Cannot DM {user_id}"
+            )
+
+        except discord.NotFound:
+
+            print(
+                f"[WINNER] "
+                f"User {user_id} not found"
+            )
+
+        except discord.HTTPException as error:
+
+            print(
+                f"[WINNER ERROR] "
+                f"{user_id}: {error}"
+            )
 
 
 async def giveaway_loop(
@@ -445,7 +493,10 @@ async def giveaway_loop(
 
     while not giveaway.ended:
 
-        if time.time() >= giveaway.end_time:
+        if (
+            time.time()
+            >= giveaway.end_time
+        ):
 
             await finish_giveaway(
                 giveaway
@@ -485,7 +536,8 @@ async def giveaway_command(
     if interaction.guild is None:
 
         await interaction.response.send_message(
-            "❌ This command must be used in a server.",
+            "❌ This command must be used "
+            "inside a server.",
             ephemeral=True
         )
 
@@ -495,11 +547,14 @@ async def giveaway_command(
         duration
     )
 
-    if seconds is None:
+    if (
+        seconds is None
+        or seconds <= 0
+    ):
 
         await interaction.response.send_message(
             "❌ Invalid duration.\n\n"
-            "Use examples like:\n"
+            "Examples:\n"
             "`30s`\n"
             "`10m`\n"
             "`2h`\n"
@@ -517,7 +572,8 @@ async def giveaway_command(
         end_time=time.time() + seconds
     )
 
-    # Only acknowledge the interaction ONCE.
+    # IMPORTANT:
+    # This is the ONLY initial interaction response.
     await interaction.response.send_message(
         embed=make_embed(
             giveaway
@@ -533,7 +589,12 @@ async def giveaway_command(
             await interaction.original_response()
         )
 
-    except discord.HTTPException:
+    except discord.HTTPException as error:
+
+        print(
+            f"[GIVEAWAY ERROR] "
+            f"{error}"
+        )
 
         return
 
@@ -550,17 +611,12 @@ async def giveaway_command(
         winners=int(winners)
     )
 
-    # IMPORTANT:
-    # The bot itself is automatically entered
-    # into its OWN giveaway.
-    giveaway.participants.add(
-        interaction.client.user.id
-    )
-
-    database.add_participant(
-        giveaway.message.id,
-        interaction.client.user.id
-    )
+    # DO NOT add the bot.
+    #
+    # The bot must NEVER become a participant.
+    #
+    # Participants start at 0 and only increase
+    # when real users click Enter Giveaway.
 
     await update_giveaway(
         giveaway
@@ -572,8 +628,16 @@ async def giveaway_command(
         )
     )
 
+    print(
+        f"[GIVEAWAY] Created "
+        f"{giveaway.message.id} "
+        f"in {interaction.guild.name}"
+    )
 
-def setup(bot):
+
+def setup(
+    bot
+):
 
     bot.tree.add_command(
         giveaway_command
