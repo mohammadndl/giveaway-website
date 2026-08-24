@@ -12,18 +12,14 @@ import database
 ACTIVE_GIVEAWAYS = {}
 
 
-DURATION_PATTERN = re.compile(
-    r"^(\d+)\s*([smhd])$",
-    re.IGNORECASE
-)
-
-
 def parse_duration(
-    value
+    value: str
 ):
 
-    match = DURATION_PATTERN.fullmatch(
-        value.strip()
+    match = re.fullmatch(
+        r"\s*(\d+)\s*([smhd])\s*",
+        value,
+        re.IGNORECASE
     )
 
     if not match:
@@ -42,35 +38,30 @@ def parse_duration(
         "d": 86400
     }
 
-    return (
-        amount
-        * multipliers[unit]
-    )
+    return amount * multipliers[unit]
 
 
-def format_remaining(
-    end_time
+def format_time(
+    timestamp: float
 ):
 
-    seconds = max(
+    remaining = max(
         0,
-        int(
-            end_time - time.time()
-        )
+        int(timestamp - time.time())
     )
 
-    days, seconds = divmod(
-        seconds,
+    days, remaining = divmod(
+        remaining,
         86400
     )
 
-    hours, seconds = divmod(
-        seconds,
+    hours, remaining = divmod(
+        remaining,
         3600
     )
 
     minutes, seconds = divmod(
-        seconds,
+        remaining,
         60
     )
 
@@ -97,27 +88,19 @@ def format_remaining(
     return f"{seconds}s"
 
 
-class Giveaway:
+class GiveawayState:
 
     def __init__(
         self,
-        channel,
-        host,
-        prize,
-        winner_count,
-        end_time
+        channel: discord.TextChannel,
+        prize: str,
+        winner_count: int,
+        end_time: float
     ):
 
         self.channel = channel
-
-        self.host = host
-
         self.prize = prize
-
-        self.winner_count = (
-            winner_count
-        )
-
+        self.winner_count = winner_count
         self.end_time = end_time
 
         self.message = None
@@ -126,39 +109,38 @@ class Giveaway:
 
         self.ended = False
 
+        self.lock = asyncio.Lock()
+
 
 def make_embed(
-    giveaway
+    giveaway: GiveawayState
 ):
 
     if giveaway.ended:
-
-        time_left = "ENDED"
+        remaining = "ENDED"
 
     else:
-
-        time_left = format_remaining(
+        remaining = format_time(
             giveaway.end_time
         )
 
     embed = discord.Embed(
         title="🎉 GIVEAWAY",
-        description=(
-            f"## 🎁 {giveaway.prize}\n\n"
+        color=discord.Color.blurple()
+    )
 
-            f"⏳ **Time Left:** "
-            f"`{time_left}`\n\n"
-
-            f"👥 **Participants:** "
-            f"`{len(giveaway.participants)}`\n\n"
-
-            f"🏆 **Winners:** "
-            f"`{giveaway.winner_count}`"
-        )
+    embed.description = (
+        f"## 🎁 {giveaway.prize}\n\n"
+        f"⏳ **Time Left:** "
+        f"`{remaining}`\n\n"
+        f"👥 **Participants:** "
+        f"`{len(giveaway.participants)}`\n\n"
+        f"🏆 **Winners:** "
+        f"`{giveaway.winner_count}`"
     )
 
     embed.set_footer(
-        text="Good luck! 🍀"
+        text="Giveaway Tracker"
     )
 
     return embed
@@ -170,8 +152,7 @@ class GiveawayView(
 
     def __init__(
         self,
-        giveaway,
-        disabled=False
+        giveaway: GiveawayState
     ):
 
         super().__init__(
@@ -180,143 +161,124 @@ class GiveawayView(
 
         self.giveaway = giveaway
 
-        enter_button = discord.ui.Button(
+        enter = discord.ui.Button(
             label="Enter Giveaway",
             emoji="🎉",
             style=discord.ButtonStyle.success,
-            disabled=disabled
+            disabled=giveaway.ended
         )
 
-        leave_button = discord.ui.Button(
+        leave = discord.ui.Button(
             label="Leave",
             emoji="🚪",
             style=discord.ButtonStyle.secondary,
-            disabled=disabled
+            disabled=giveaway.ended
         )
 
-        enter_button.callback = (
-            self.enter_callback
-        )
+        enter.callback = self.enter
+        leave.callback = self.leave
 
-        leave_button.callback = (
-            self.leave_callback
-        )
+        self.add_item(enter)
+        self.add_item(leave)
 
-        self.add_item(
-            enter_button
-        )
-
-        self.add_item(
-            leave_button
-        )
-
-    async def enter_callback(
+    async def enter(
         self,
-        interaction
+        interaction: discord.Interaction
     ):
 
         giveaway = self.giveaway
 
-        if (
-            giveaway.ended
-            or time.time()
-            >= giveaway.end_time
-        ):
+        async with giveaway.lock:
 
-            await interaction.response.send_message(
-                "❌ This giveaway has ended.",
-                ephemeral=True
-            )
+            if (
+                giveaway.ended
+                or time.time()
+                >= giveaway.end_time
+            ):
 
-            return
+                await interaction.response.send_message(
+                    "❌ This giveaway has ended.",
+                    ephemeral=True
+                )
 
-        if (
-            interaction.user.id
-            in giveaway.participants
-        ):
+                return
 
-            await interaction.response.send_message(
-                "ℹ️ You're already entered!",
-                ephemeral=True
-            )
+            if (
+                interaction.user.id
+                in giveaway.participants
+            ):
 
-            return
+                await interaction.response.send_message(
+                    "ℹ️ You are already entered.",
+                    ephemeral=True
+                )
 
-        giveaway.participants.add(
-            interaction.user.id
-        )
+                return
 
-        if giveaway.message:
-
-            database.add_participant(
-                giveaway.message.id,
+            giveaway.participants.add(
                 interaction.user.id
             )
 
+            if giveaway.message:
+
+                database.add_participant(
+                    giveaway.message.id,
+                    interaction.user.id
+                )
+
         await interaction.response.send_message(
-            "🎉 **You're entered!**",
+            "🎉 **You entered the giveaway!**",
             ephemeral=True
         )
 
-        await update_giveaway(
+        await refresh_message(
             giveaway
         )
 
-    async def leave_callback(
+    async def leave(
         self,
-        interaction
+        interaction: discord.Interaction
     ):
 
         giveaway = self.giveaway
 
-        if (
-            giveaway.ended
-            or time.time()
-            >= giveaway.end_time
-        ):
+        async with giveaway.lock:
 
-            await interaction.response.send_message(
-                "❌ This giveaway has ended.",
-                ephemeral=True
-            )
+            if (
+                interaction.user.id
+                not in giveaway.participants
+            ):
 
-            return
+                await interaction.response.send_message(
+                    "ℹ️ You are not entered.",
+                    ephemeral=True
+                )
 
-        if (
-            interaction.user.id
-            not in giveaway.participants
-        ):
+                return
 
-            await interaction.response.send_message(
-                "ℹ️ You're not entered.",
-                ephemeral=True
-            )
-
-            return
-
-        giveaway.participants.remove(
-            interaction.user.id
-        )
-
-        if giveaway.message:
-
-            database.remove_participant(
-                giveaway.message.id,
+            giveaway.participants.remove(
                 interaction.user.id
             )
+
+            if giveaway.message:
+
+                database.remove_participant(
+                    giveaway.message.id,
+                    interaction.user.id
+                )
 
         await interaction.response.send_message(
             "🚪 **You left the giveaway.**",
             ephemeral=True
         )
 
-        await update_giveaway(
+        await refresh_message(
             giveaway
         )
 
 
-async def update_giveaway(
-    giveaway
+async def refresh_message(
+    giveaway: GiveawayState
 ):
 
     if giveaway.message is None:
@@ -329,54 +291,55 @@ async def update_giveaway(
                 giveaway
             ),
             view=GiveawayView(
-                giveaway,
-                giveaway.ended
+                giveaway
             )
         )
 
-    except (
-        discord.NotFound,
-        discord.Forbidden,
-        discord.HTTPException
-    ):
+    except discord.NotFound:
 
         giveaway.message = None
 
+    except discord.Forbidden:
+
+        giveaway.message = None
+
+    except discord.HTTPException as error:
+
+        print(
+            f"[GIVEAWAY] Edit error "
+            f"HTTP {error.status}"
+        )
+
 
 async def finish_giveaway(
-    giveaway
+    giveaway: GiveawayState
 ):
 
-    if giveaway.ended:
-        return
+    async with giveaway.lock:
 
-    giveaway.ended = True
+        if giveaway.ended:
+            return
+
+        giveaway.ended = True
+
+        participants = list(
+            giveaway.participants
+        )
 
     ACTIVE_GIVEAWAYS.pop(
         giveaway.channel.id,
         None
     )
 
-    participants = list(
-        giveaway.participants
-    )
-
-    if participants:
-
-        winners = random.sample(
-            participants,
-            min(
-                giveaway.winner_count,
-                len(participants)
-            )
+    winners = random.sample(
+        participants,
+        min(
+            giveaway.winner_count,
+            len(participants)
         )
+    ) if participants else []
 
-    else:
-
-        winners = []
-
-    # Disable buttons.
-    await update_giveaway(
+    await refresh_message(
         giveaway
     )
 
@@ -391,7 +354,7 @@ async def finish_giveaway(
 
     else:
 
-        winner_mentions = ", ".join(
+        mentions = ", ".join(
             f"<@{user_id}>"
             for user_id in winners
         )
@@ -402,8 +365,10 @@ async def finish_giveaway(
             f"{giveaway.prize}\n\n"
             f"🏆 **Winner"
             f"{'s' if len(winners) != 1 else ''}:** "
-            f"{winner_mentions}"
+            f"{mentions}"
         )
+
+    result_message = None
 
     try:
 
@@ -413,90 +378,85 @@ async def finish_giveaway(
             )
         )
 
-    except (
-        discord.NotFound,
-        discord.Forbidden,
-        discord.HTTPException
-    ):
+    except discord.HTTPException as error:
 
-        result_message = None
+        print(
+            f"[GIVEAWAY] "
+            f"Winner announcement failed: "
+            f"HTTP {error.status}"
+        )
 
-    # DM winners.
-    #
-    # This does NOT add them to a server.
-    # It only sends the winner DM.
+    winning_link = None
+
+    if result_message:
+
+        winning_link = (
+            result_message.jump_url
+        )
+
+    elif giveaway.message:
+
+        winning_link = (
+            giveaway.message.jump_url
+        )
+
     for user_id in winners:
 
         try:
 
-            user = await giveaway.channel.guild.fetch_member(
-                user_id
+            user = (
+                await giveaway.channel.guild
+                .fetch_member(user_id)
             )
-
-            if giveaway.message:
-
-                message_link = (
-                    giveaway.message.jump_url
-                )
-
-            elif result_message:
-
-                message_link = (
-                    result_message.jump_url
-                )
-
-            else:
-
-                message_link = (
-                    "The giveaway message "
-                    "is no longer available."
-                )
 
             await user.send(
                 "🏆 **YOU WON!**\n\n"
                 f"🎁 **Prize:** "
                 f"{giveaway.prize}\n\n"
-                f"🔗 **Giveaway message:**\n"
-                f"{message_link}"
-            )
-
-            print(
-                f"[WINNER] "
-                f"DM sent to {user_id}"
-            )
-
-        except discord.Forbidden:
-
-            print(
-                f"[WINNER] "
-                f"Cannot DM {user_id}"
+                "🎉 Congratulations!\n\n"
+                "🔗 **Winning message:**\n"
+                f"{winning_link or 'Unavailable'}"
             )
 
         except discord.NotFound:
 
             print(
-                f"[WINNER] "
-                f"User {user_id} not found"
+                f"[GIVEAWAY] "
+                f"Winner {user_id} "
+                "could not be found."
+            )
+
+        except discord.Forbidden:
+
+            print(
+                f"[GIVEAWAY] "
+                f"Cannot DM winner "
+                f"{user_id}."
             )
 
         except discord.HTTPException as error:
 
             print(
-                f"[WINNER ERROR] "
-                f"{user_id}: {error}"
+                f"[GIVEAWAY] "
+                f"Winner DM HTTP "
+                f"{error.status}"
             )
+
+    print(
+        f"[GIVEAWAY] Finished "
+        f"prize={giveaway.prize} "
+        f"participants={len(participants)} "
+        f"winners={len(winners)}"
+    )
 
 
 async def giveaway_loop(
-    giveaway
+    giveaway: GiveawayState
 ):
 
     while not giveaway.ended:
 
-        if (
-            time.time()
-            >= giveaway.end_time
-        ):
+        if time.time() >= giveaway.end_time:
 
             await finish_giveaway(
                 giveaway
@@ -504,7 +464,7 @@ async def giveaway_loop(
 
             return
 
-        await update_giveaway(
+        await refresh_message(
             giveaway
         )
 
@@ -526,18 +486,13 @@ async def giveaway_command(
     interaction: discord.Interaction,
     prize: str,
     duration: str,
-    winners: app_commands.Range[
-        int,
-        1,
-        100
-    ]
+    winners: app_commands.Range[int, 1, 100]
 ):
 
     if interaction.guild is None:
 
         await interaction.response.send_message(
-            "❌ This command must be used "
-            "inside a server.",
+            "❌ This command can only be used inside a server.",
             ephemeral=True
         )
 
@@ -547,10 +502,7 @@ async def giveaway_command(
         duration
     )
 
-    if (
-        seconds is None
-        or seconds <= 0
-    ):
+    if seconds is None:
 
         await interaction.response.send_message(
             "❌ Invalid duration.\n\n"
@@ -564,16 +516,24 @@ async def giveaway_command(
 
         return
 
-    giveaway = Giveaway(
+    if seconds <= 0:
+
+        await interaction.response.send_message(
+            "❌ Duration must be greater than zero.",
+            ephemeral=True
+        )
+
+        return
+
+    giveaway = GiveawayState(
         channel=interaction.channel,
-        host=interaction.user,
         prize=prize,
         winner_count=int(winners),
         end_time=time.time() + seconds
     )
 
     # IMPORTANT:
-    # This is the ONLY initial interaction response.
+    # Respond exactly once.
     await interaction.response.send_message(
         embed=make_embed(
             giveaway
@@ -592,35 +552,18 @@ async def giveaway_command(
     except discord.HTTPException as error:
 
         print(
-            f"[GIVEAWAY ERROR] "
-            f"{error}"
+            f"[GIVEAWAY] "
+            f"Could not fetch original "
+            f"message: HTTP {error.status}"
         )
 
         return
 
+    # Restore nothing from an old giveaway.
+    # This giveaway owns its own participant set.
     ACTIVE_GIVEAWAYS[
-        interaction.channel.id
+        giveaway.message.id
     ] = giveaway
-
-    database.save_giveaway(
-        message_id=giveaway.message.id,
-        guild_id=interaction.guild.id,
-        channel_id=interaction.channel.id,
-        jump_url=giveaway.message.jump_url,
-        prize=prize,
-        winners=int(winners)
-    )
-
-    # DO NOT add the bot.
-    #
-    # The bot must NEVER become a participant.
-    #
-    # Participants start at 0 and only increase
-    # when real users click Enter Giveaway.
-
-    await update_giveaway(
-        giveaway
-    )
 
     asyncio.create_task(
         giveaway_loop(
@@ -628,17 +571,14 @@ async def giveaway_command(
         )
     )
 
-    print(
-        f"[GIVEAWAY] Created "
-        f"{giveaway.message.id} "
-        f"in {interaction.guild.name}"
-    )
 
-
-def setup(
-    bot
-):
+def setup(bot):
 
     bot.tree.add_command(
         giveaway_command
+    )
+
+    print(
+        "[GIVEAWAY] "
+        "/giveaway registered."
     )

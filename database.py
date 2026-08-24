@@ -3,29 +3,35 @@ import sqlite3
 import threading
 import time
 
-DB_PATH = os.getenv("DATABASE_PATH", "giveaway_tracker.db")
 
-LOCK = threading.RLock()
+DATABASE_PATH = os.getenv(
+    "DATABASE_PATH",
+    "giveaway_tracker.db"
+)
+
+_DB_LOCK = threading.RLock()
 
 
-def connect():
-    conn = sqlite3.connect(
-        DB_PATH,
+def _connect():
+    connection = sqlite3.connect(
+        DATABASE_PATH,
         timeout=30
     )
 
-    conn.row_factory = sqlite3.Row
+    connection.row_factory = sqlite3.Row
 
-    return conn
+    return connection
 
 
 def init_db():
+    with _DB_LOCK:
+        connection = _connect()
 
-    with LOCK:
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
 
-        with connect() as conn:
-
-            conn.executescript("""
+            connection.executescript(
+                """
                 CREATE TABLE IF NOT EXISTS auto_join (
                     user_id TEXT PRIMARY KEY,
                     enabled INTEGER NOT NULL DEFAULT 0,
@@ -33,42 +39,52 @@ def init_db():
                     updated_at REAL NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS giveaways (
+                CREATE TABLE IF NOT EXISTS detected_giveaways (
                     message_id TEXT PRIMARY KEY,
                     guild_id TEXT,
-                    channel_id TEXT,
-                    jump_url TEXT,
+                    channel_id TEXT NOT NULL,
+                    jump_url TEXT NOT NULL,
                     prize TEXT,
-                    winners INTEGER,
-                    created_at REAL NOT NULL
+                    winner_count INTEGER,
+                    invite_url TEXT,
+                    detected_at REAL NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS participants (
-                    giveaway_id TEXT NOT NULL,
+                CREATE TABLE IF NOT EXISTS giveaway_participants (
+                    message_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
+                    joined_at REAL NOT NULL,
 
                     PRIMARY KEY (
-                        giveaway_id,
+                        message_id,
                         user_id
                     )
                 );
-            """)
 
-            conn.commit()
+                CREATE INDEX IF NOT EXISTS
+                idx_auto_join_enabled
+                ON auto_join(enabled);
+
+                CREATE INDEX IF NOT EXISTS
+                idx_giveaway_participants_message
+                ON giveaway_participants(message_id);
+                """
+            )
+
+            connection.commit()
+
+        finally:
+            connection.close()
 
 
-def set_auto_join(
-    user_id,
-    enabled
-):
-
+def set_auto_join(user_id: int, enabled: bool):
     now = time.time()
 
-    with LOCK:
+    with _DB_LOCK:
+        connection = _connect()
 
-        with connect() as conn:
-
-            conn.execute(
+        try:
+            connection.execute(
                 """
                 INSERT INTO auto_join (
                     user_id,
@@ -85,49 +101,47 @@ def set_auto_join(
                 """,
                 (
                     str(user_id),
-                    int(enabled),
+                    1 if enabled else 0,
                     now,
                     now
                 )
             )
 
-            conn.commit()
+            connection.commit()
+
+        finally:
+            connection.close()
 
 
-def auto_join_enabled(
-    user_id
-):
+def auto_join_enabled(user_id: int) -> bool:
+    with _DB_LOCK:
+        connection = _connect()
 
-    with LOCK:
-
-        with connect() as conn:
-
-            row = conn.execute(
+        try:
+            row = connection.execute(
                 """
                 SELECT enabled
                 FROM auto_join
                 WHERE user_id = ?
                 """,
-                (
-                    str(user_id),
-                )
+                (str(user_id),)
             ).fetchone()
 
             if row is None:
                 return False
 
-            return bool(
-                row["enabled"]
-            )
+            return bool(row["enabled"])
+
+        finally:
+            connection.close()
 
 
 def get_auto_join_users():
+    with _DB_LOCK:
+        connection = _connect()
 
-    with LOCK:
-
-        with connect() as conn:
-
-            rows = conn.execute(
+        try:
+            rows = connection.execute(
                 """
                 SELECT user_id
                 FROM auto_join
@@ -135,146 +149,211 @@ def get_auto_join_users():
                 """
             ).fetchall()
 
-            return [
-                int(row["user_id"])
-                for row in rows
-            ]
+            users = []
+
+            for row in rows:
+                try:
+                    users.append(int(row["user_id"]))
+                except (TypeError, ValueError):
+                    continue
+
+            return users
+
+        finally:
+            connection.close()
 
 
-def giveaway_exists(
-    message_id
-):
+def giveaway_exists(message_id: int) -> bool:
+    with _DB_LOCK:
+        connection = _connect()
 
-    with LOCK:
-
-        with connect() as conn:
-
-            row = conn.execute(
+        try:
+            row = connection.execute(
                 """
                 SELECT 1
-                FROM giveaways
+                FROM detected_giveaways
                 WHERE message_id = ?
+                LIMIT 1
                 """,
-                (
-                    str(message_id),
-                )
+                (str(message_id),)
             ).fetchone()
 
             return row is not None
 
+        finally:
+            connection.close()
 
-def save_giveaway(
-    message_id,
+
+def save_detected_giveaway(
+    message_id: int,
     guild_id,
-    channel_id,
-    jump_url,
-    prize,
-    winners
+    channel_id: int,
+    jump_url: str,
+    prize: str,
+    winner_count,
+    invite_url
 ):
+    with _DB_LOCK:
+        connection = _connect()
 
-    with LOCK:
-
-        with connect() as conn:
-
-            conn.execute(
+        try:
+            connection.execute(
                 """
-                INSERT OR IGNORE INTO giveaways (
+                INSERT OR IGNORE INTO detected_giveaways (
                     message_id,
                     guild_id,
                     channel_id,
                     jump_url,
                     prize,
-                    winners,
-                    created_at
+                    winner_count,
+                    invite_url,
+                    detected_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(message_id),
-                    str(guild_id)
-                    if guild_id is not None
-                    else None,
+                    str(guild_id) if guild_id else None,
                     str(channel_id),
                     jump_url,
                     prize,
-                    winners,
+                    winner_count,
+                    invite_url,
                     time.time()
                 )
             )
 
-            conn.commit()
+            connection.commit()
+
+        finally:
+            connection.close()
 
 
 def add_participant(
-    giveaway_id,
-    user_id
-):
+    message_id: int,
+    user_id: int
+) -> bool:
 
-    with LOCK:
+    with _DB_LOCK:
+        connection = _connect()
 
-        with connect() as conn:
-
-            conn.execute(
+        try:
+            cursor = connection.execute(
                 """
-                INSERT OR IGNORE INTO participants (
-                    giveaway_id,
-                    user_id
+                INSERT OR IGNORE INTO giveaway_participants (
+                    message_id,
+                    user_id,
+                    joined_at
                 )
-                VALUES (?, ?)
+                VALUES (?, ?, ?)
                 """,
                 (
-                    str(giveaway_id),
-                    str(user_id)
+                    str(message_id),
+                    str(user_id),
+                    time.time()
                 )
             )
 
-            conn.commit()
+            connection.commit()
+
+            return cursor.rowcount > 0
+
+        finally:
+            connection.close()
 
 
 def remove_participant(
-    giveaway_id,
-    user_id
-):
+    message_id: int,
+    user_id: int
+) -> bool:
 
-    with LOCK:
+    with _DB_LOCK:
+        connection = _connect()
 
-        with connect() as conn:
-
-            conn.execute(
+        try:
+            cursor = connection.execute(
                 """
-                DELETE FROM participants
-                WHERE giveaway_id = ?
+                DELETE FROM giveaway_participants
+                WHERE message_id = ?
                 AND user_id = ?
                 """,
                 (
-                    str(giveaway_id),
+                    str(message_id),
                     str(user_id)
                 )
             )
 
-            conn.commit()
+            connection.commit()
+
+            return cursor.rowcount > 0
+
+        finally:
+            connection.close()
 
 
-def get_participants(
-    giveaway_id
-):
+def get_participants(message_id: int):
+    with _DB_LOCK:
+        connection = _connect()
 
-    with LOCK:
-
-        with connect() as conn:
-
-            rows = conn.execute(
+        try:
+            rows = connection.execute(
                 """
                 SELECT user_id
-                FROM participants
-                WHERE giveaway_id = ?
+                FROM giveaway_participants
+                WHERE message_id = ?
+                ORDER BY joined_at ASC
                 """,
-                (
-                    str(giveaway_id),
-                )
+                (str(message_id),)
             ).fetchall()
 
-            return [
-                int(row["user_id"])
-                for row in rows
-            ]
+            result = []
+
+            for row in rows:
+                try:
+                    result.append(int(row["user_id"]))
+                except (TypeError, ValueError):
+                    continue
+
+            return result
+
+        finally:
+            connection.close()
+
+
+def count_participants(message_id: int) -> int:
+    with _DB_LOCK:
+        connection = _connect()
+
+        try:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS amount
+                FROM giveaway_participants
+                WHERE message_id = ?
+                """,
+                (str(message_id),)
+            ).fetchone()
+
+            return int(row["amount"])
+
+        finally:
+            connection.close()
+
+
+def clear_participants(message_id: int):
+    with _DB_LOCK:
+        connection = _connect()
+
+        try:
+            connection.execute(
+                """
+                DELETE FROM giveaway_participants
+                WHERE message_id = ?
+                """,
+                (str(message_id),)
+            )
+
+            connection.commit()
+
+        finally:
+            connection.close()

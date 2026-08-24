@@ -1,23 +1,47 @@
 """
-OAuth is intentionally disabled.
+Giveaway Tracker OAuth module.
 
-This version does NOT use:
+The current Auto Join architecture does NOT use OAuth.
 
-- OAuth user tokens
-- user-account automation
-- self-bots
-- user impersonation
+Auto Join means:
 
-The bot account handles its own giveaway entries.
+1. User enables /auto_join on in DM.
+2. Detector finds a giveaway.
+3. Bot DMs the user.
+4. DM contains the server invite.
+5. DM contains the giveaway message link.
+6. User joins and enters manually.
+
+There is intentionally:
+
+- no OAuth polling
+- no OAuth background task
+- no authorization synchronization
+- no access-token storage
+- no guild-member OAuth endpoint
+- no duplicate OAuth database
+
+This module exists only so bot.py can have a clean,
+stable module boundary.
 """
 
-def init_oauth():
+
+def setup(*args, **kwargs):
+
     print(
-        "[OAUTH] Disabled."
+        "[OAUTH] OAuth system disabled."
+    )
+
+    print(
+        "[OAUTH] Auto Join does not require OAuth."
     )
 
 
-async def start_oauth_server():
-    print(
-        "[OAUTH] Disabled."
-    )
+async def start(*args, **kwargs):
+
+    return None
+
+
+async def stop(*args, **kwargs):
+
+    return None
